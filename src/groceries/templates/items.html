@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Items{% endblock %}
+{% block content %}
+<h1>Items</h1>
+<form method="post" action="/items" class="inline">
+  <input name="name" placeholder="New item name" required>
+  <button>Add item</button>
+</form>
+<table>
+  <thead><tr><th>Item</th><th>AnyList names</th><th>Stores</th><th>Products</th></tr></thead>
+  <tbody>
+  {% for i in items %}
+    <tr>
+      <td><a href="/items/{{ i.id }}">{{ i.name }}</a>{% if i.hand_pick %} <span class="tag">hand-pick</span>{% endif %}</td>
+      <td>{{ i.aliases or '' }}</td>
+      <td>{{ i.stores or '—' }}</td>
+      <td>{{ i.products }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="4">No items yet. They're created from the Review page as new names show up in AnyList.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

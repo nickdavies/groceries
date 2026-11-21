@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}On the way{% endblock %}
+{% block content %}
+<h1>On the way</h1>
+{% for store, entries in groups.items() %}
+<section>
+  <h2>{{ store }} ({{ entries|length }})</h2>
+  <form method="post" action="/entries/delivered">
+    {% for e in entries %}<input type="hidden" name="ids" value="{{ e.anylist_item_id }}">{% endfor %}
+    <button>All delivered — check off in AnyList</button>
+  </form>
+  <table>
+    <tbody>
+    {% for e in entries %}
+      <tr>
+        <td>{{ e.name }}{% if e.quantity %} × {{ e.quantity }}{% endif %}</td>
+        <td>
+          <form method="post" action="/entries/delivered">
+            <input type="hidden" name="ids" value="{{ e.anylist_item_id }}">
+            <button class="small">Delivered</button>
+          </form>
+        </td>
+        <td>
+          <form method="post" action="/entries/not-received">
+            <input type="hidden" name="ids" value="{{ e.anylist_item_id }}">
+            <button class="small secondary">Didn't arrive</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% else %}
+<p>Nothing on the way.</p>
+{% endfor %}
+{% endblock %}

@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Groceries</h1>
+<form method="post" action="/sync"><button>Sync with AnyList now</button></form>
+
+<table>
+  <thead><tr><th>Store</th><th>To order</th><th>In person</th><th>On the way</th><th>Using</th></tr></thead>
+  <tbody>
+  {% for s in stores %}
+    <tr>
+      <td><a href="/stores/{{ s.id }}">{{ s.name }}</a></td>
+      <td>{{ s.deliver }}</td>
+      <td>{{ s.in_person }}</td>
+      <td>{{ s.en_route }}</td>
+      <td>
+        <form method="post" action="/stores/{{ s.id }}/active">
+          <input type="hidden" name="active" value="{{ 'false' if s.active else 'true' }}">
+          <button class="small">{{ 'Yes — skip it' if s.active else 'Skipped — use it' }}</button>
+        </form>
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+<p class="hint">Skipping a store sends its items to each item's next-choice store.</p>
+
+{% if review %}<p><a href="/review">{{ review }} item{{ 's' if review != 1 }} need review</a></p>{% endif %}
+
+{% if svc.last_sync %}
+<p class="hint">Last sync: {{ svc.last_sync.lines }} open lines,
+  {{ svc.last_sync.writes|length }} store changes written,
+  {{ svc.last_sync.manual|length }} set by hand in AnyList.</p>
+{% endif %}
+{% endblock %}

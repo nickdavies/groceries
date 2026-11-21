@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Settings{% endblock %}
+{% block content %}
+<h1>Settings</h1>
+
+<h2>King Soopers store</h2>
+<p class="hint">Product search shows prices and stock for this store.</p>
+{% if location %}
+<p><strong>{{ location.name }}</strong><br>{{ location.address }}</p>
+{% else %}
+<p class="error">No store picked yet. King Soopers product search is off until you pick one.</p>
+{% endif %}
+
+{% if kroger_enabled %}
+<form method="get" action="/settings" class="inline">
+  <input name="zip" value="{{ zip }}" placeholder="ZIP code" inputmode="numeric" required>
+  <button class="small">Find stores</button>
+</form>
+{% if error %}<p class="error">Lookup failed: {{ error }}</p>{% endif %}
+{% if locations %}
+<table>
+  <tbody>
+  {% for l in locations %}
+    <tr>
+      <td><strong>{{ l.name }}</strong><div class="hint">{{ l.address }}</div></td>
+      <td>
+        {% if location and location.id == l.id %}
+          <span class="tag">current</span>
+        {% else %}
+        <form method="post" action="/settings/kroger-location">
+          <input type="hidden" name="id" value="{{ l.id }}">
+          <input type="hidden" name="name" value="{{ l.name }}">
+          <input type="hidden" name="address" value="{{ l.address }}">
+          <button class="small">Use this store</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% elif zip and not error %}
+<p>No King Soopers stores found near {{ zip }}.</p>
+{% endif %}
+{% else %}
+<p class="hint">Kroger API credentials aren't configured.</p>
+{% endif %}
+{% endblock %}

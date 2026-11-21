@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Groceries{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}">
+</head>
+<body>
+  <nav>
+    <a href="/">Overview</a>
+    {% for s in nav_stores %}<a href="/stores/{{ s.id }}">{{ s.name }}</a>{% endfor %}
+    <a href="/on-the-way">On the way</a>
+    <a href="/review">Review</a>
+    <a href="/items">Items</a>
+    <a href="/settings">Settings</a>
+  </nav>
+  {% if svc.last_error %}<p class="error">Last sync failed: {{ svc.last_error }}</p>{% endif %}
+  <main>{% block content %}{% endblock %}</main>
+</body>
+</html>

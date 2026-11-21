@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+{% block title %}{{ item.name }}{% endblock %}
+{% block content %}
+<h1>{{ item.name }}</h1>
+
+<form method="post" action="/items/{{ item.id }}">
+  <label>Name <input name="name" value="{{ item.name }}" required></label>
+  <label class="check"><input type="checkbox" name="hand_pick" {{ 'checked' if item.hand_pick }}>
+    Hand-pick in person (never ordered for delivery)</label>
+  <h2>Where to buy it</h2>
+  <p class="hint">1 = first choice. If that store is skipped, the next choice is used. Leave blank for "never".</p>
+  <table>
+    <tbody>
+    {% for s in stores %}
+      <tr>
+        <td>{{ s.name }}{% if not s.active %} <span class="tag">skipped</span>{% endif %}</td>
+        <td>
+          <select name="rank_{{ s.id }}">
+            <option value="">—</option>
+            {% for n in range(1, stores|length + 1) %}
+              <option value="{{ n }}" {{ 'selected' if s.rank == n }}>{{ n }}</option>
+            {% endfor %}
+          </select>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <button>Save</button>
+</form>
+
+<h2>AnyList names</h2>
+<ul>
+  {% for a in aliases %}
+  <li>{{ a.external_id }}
+    <form method="post" action="/aliases/delete" class="inline">
+      <input type="hidden" name="alias" value="{{ a.external_id }}">
+      <button class="small secondary">remove</button>
+    </form>
+  </li>
+  {% endfor %}
+</ul>
+<form method="post" action="/aliases" class="inline">
+  <input type="hidden" name="item_id" value="{{ item.id }}">
+  <input name="alias" placeholder="another name, e.g. yellow onions" required>
+  <button class="small">Add name</button>
+</form>
+
+<h2>Products</h2>
+{% for s in stores %}
+<section>
+  <h3>{{ s.name }}</h3>
+  {% if products[s.id] %}
+  {% for p in products[s.id] %}<form method="post" action="/products/{{ p.id }}" id="p{{ p.id }}"></form>{% endfor %}
+  <table>
+    <thead><tr><th>Product</th><th>Order</th><th>Use</th><th></th><th></th></tr></thead>
+    <tbody>
+    {% for p in products[s.id] %}
+      <tr>
+        <td><a href="{{ p.url }}" target="_blank" rel="noopener">{{ p.label }}</a>{% if p.upc %} <span class="hint">UPC {{ p.upc }}</span>{% endif %}</td>
+        <td><input type="number" name="priority" value="{{ p.priority }}" form="p{{ p.id }}" class="narrow"></td>
+        <td><input type="checkbox" name="enabled" value="true" form="p{{ p.id }}" {{ 'checked' if p.enabled }}></td>
+        <td><button class="small" form="p{{ p.id }}">Save</button></td>
+        <td>
+          <form method="post" action="/products/{{ p.id }}/delete">
+            <button class="small secondary">Delete</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  {% if s.kind == 'kroger' %}
+    {% if kroger_enabled and not kroger_location %}
+    <p class="hint">Pick your store in <a href="/settings">Settings</a> to search {{ s.name }}.</p>
+    {% elif kroger_enabled %}
+    <form method="get" action="/items/{{ item.id }}" class="inline">
+      <input name="q" value="{{ q }}">
+      <button class="small">Search {{ s.name }}</button>
+    </form>
+    {% if search_error %}<p class="error">Search failed: {{ search_error }}</p>{% endif %}
+    {% if results %}
+    <table class="results">
+      <tbody>
+      {% for r in results %}
+        <tr>
+          <td>{% if r.image %}<img src="{{ r.image }}" alt="" loading="lazy">{% endif %}</td>
+          <td><a href="{{ r.url }}" target="_blank" rel="noopener">{{ r.description }}</a>
+            <div class="hint">{{ r.size }}{% if r.price %} · ${{ '%.2f'|format(r.price) }}{% endif %}{% if r.promo %} (sale ${{ '%.2f'|format(r.promo) }}){% endif %}</div></td>
+          <td>
+            <form method="post" action="/items/{{ item.id }}/products">
+              <input type="hidden" name="store_id" value="{{ s.id }}">
+              <input type="hidden" name="label" value="{{ r.label }}">
+              <input type="hidden" name="url" value="{{ r.url }}">
+              <input type="hidden" name="upc" value="{{ r.upc }}">
+              <button class="small">Add</button>
+            </form>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+    {% else %}
+    <p class="hint">Kroger search isn't configured.</p>
+    {% endif %}
+  {% else %}
+  <form method="post" action="/items/{{ item.id }}/products" class="inline">
+    <input type="hidden" name="store_id" value="{{ s.id }}">
+    <input name="label" placeholder="Product name" required>
+    <input name="url" type="url" placeholder="Link to the product page" required>
+    <button class="small">Add</button>
+  </form>
+  {% endif %}
+</section>
+{% endfor %}
+
+<form method="post" action="/items/{{ item.id }}/delete" onsubmit="return confirm('Delete this item?')">
+  <button class="secondary">Delete item</button>
+</form>
+{% endblock %}

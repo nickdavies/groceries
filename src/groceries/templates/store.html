@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}{{ store.name }}{% endblock %}
+{% block content %}
+<h1>{{ store.name }}</h1>
+{% if not store.active %}<p class="error">This store is skipped. Its items are routed elsewhere.</p>{% endif %}
+
+<h2>To order ({{ deliver|length }})</h2>
+{% if deliver %}
+<p class="hint">Open each link, add it to your {{ store.name }} cart, then tick it off here.</p>
+<form method="post" action="/entries/en-route" id="added"></form>
+<table>
+  <tbody>
+  {% for e in deliver %}
+    <tr>
+      <td><input type="checkbox" name="ids" value="{{ e.anylist_item_id }}" form="added"></td>
+      <td>
+        <strong>{{ e.name }}</strong>{% if e.quantity %} <span class="qty">× {{ e.quantity }}</span>{% endif %}
+        {% if e.manual %}<span class="tag">set in AnyList</span>{% endif %}
+        <div class="links">
+        {% for p in products.get(e.anylist_item_id, []) %}
+          <a href="{{ p.url }}" target="_blank" rel="noopener">{{ p.label }}</a>
+        {% else %}
+          {% set link = search_link(search_url, e.name) %}
+          {% if link %}<a href="{{ link }}" target="_blank" rel="noopener">Search {{ store.name }}</a>{% endif %}
+          {% if e.item_id %}<a href="/items/{{ e.item_id }}">add products</a>{% endif %}
+        {% endfor %}
+        </div>
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+<button form="added">Mark ticked items as added to cart</button>
+{% else %}
+<p>Nothing to order.</p>
+{% endif %}
+
+{% if in_person %}
+<h2>Pick in person ({{ in_person|length }})</h2>
+<p class="hint">These are on the "{{ store.name }} (in person)" store in AnyList.</p>
+<ul>
+  {% for e in in_person %}<li>{{ e.name }}{% if e.quantity %} × {{ e.quantity }}{% endif %}</li>{% endfor %}
+</ul>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Review{% endblock %}
+{% block content %}
+<h1>Needs review</h1>
+
+<h2>New names ({{ unmatched|length }})</h2>
+{% if unmatched %}
+<p class="hint">These AnyList names aren't linked to an item yet. Make a new item, or say it's another name for one you already have.</p>
+<table>
+  <tbody>
+  {% for e in unmatched %}
+    <tr>
+      <td><strong>{{ e.name }}</strong></td>
+      <td>
+        <form method="post" action="/items">
+          <input type="hidden" name="name" value="{{ e.name }}">
+          <button class="small">New item</button>
+        </form>
+      </td>
+      <td>
+        {% if items %}
+        <form method="post" action="/aliases" class="inline">
+          <input type="hidden" name="alias" value="{{ e.name }}">
+          <select name="item_id">{% for i in items %}<option value="{{ i.id }}">{{ i.name }}</option>{% endfor %}</select>
+          <button class="small secondary">Same as</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>None.</p>
+{% endif %}
+
+<h2>No store to go to ({{ unrouted|length }})</h2>
+{% if unrouted %}
+<p class="hint">These items have no stores picked, or every store they allow is skipped.</p>
+<ul>
+  {% for e in unrouted %}<li><a href="/items/{{ e.item_id }}">{{ e.item_name }}</a> (AnyList: {{ e.name }})</li>{% endfor %}
+</ul>
+{% else %}
+<p>None.</p>
+{% endif %}
+{% endblock %}

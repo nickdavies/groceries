@@ -1,0 +1,62 @@
+:root {
+  --bg: #fafaf7;
+  --fg: #1f2328;
+  --muted: #6a737d;
+  --accent: #2f6f4f;
+  --line: #e2e2dc;
+  --error-bg: #fdecea;
+  --error-fg: #8a1c12;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #16181b;
+    --fg: #e6e6e3;
+    --muted: #9aa0a6;
+    --accent: #6fbf8f;
+    --line: #2c2f33;
+    --error-bg: #3b1a17;
+    --error-fg: #f4b4ad;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 16px/1.45 system-ui, sans-serif;
+}
+nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+}
+main { padding: 0 16px 48px; max-width: 900px; }
+a { color: var(--accent); }
+table { border-collapse: collapse; width: 100%; margin: 8px 0 16px; }
+td, th { padding: 8px 6px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+button {
+  font: inherit;
+  padding: 8px 14px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--accent);
+  color: var(--bg);
+  cursor: pointer;
+}
+button.small { padding: 4px 10px; font-size: 14px; }
+button.secondary { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+input, select { font: inherit; padding: 6px 8px; max-width: 100%; }
+input[type="checkbox"] { width: 20px; height: 20px; }
+.narrow { width: 5em; }
+label { display: block; margin: 8px 0; }
+label.check { display: flex; gap: 8px; align-items: center; }
+form.inline { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; }
+.links { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 4px; font-size: 15px; }
+.hint { color: var(--muted); font-size: 14px; }
+.qty { color: var(--muted); }
+.tag { font-size: 12px; padding: 1px 6px; border: 1px solid var(--line); border-radius: 4px; color: var(--muted); }
+.error { background: var(--error-bg); color: var(--error-fg); padding: 8px 12px; border-radius: 6px; }
+.results img { width: 48px; height: 48px; object-fit: contain; }
