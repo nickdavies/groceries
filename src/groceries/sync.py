@@ -1,81 +1,33 @@
-"""Reconcile the AnyList list with the database and route lines to stores.
+"""Mirror the AnyList list, keep item store sets in step with it, and track orders.
 
-AnyList only has checked/unchecked, so the three-way state is split:
-  needed    unchecked, sitting at its routed store (or unrouted, awaiting review)
-  en route  unchecked, moved to the "On the way" AnyList store
-  done      checked in AnyList, at which point the line is dropped from the database
-
-Manual overrides: we remember which AnyList stores we expect each line to have. If AnyList
-disagrees, a human moved it, and the line becomes `manual` (routing leaves it alone) until
-someone clears its stores again.
+An item's store set and its AnyList lines' stores are synced both ways, and the latest
+change wins. AnyList keeps no modification times, so "latest" comes from ordering:
+  - Each line records the stores last seen or written. If AnyList differs at the next
+    sync, a person changed them there, and the item takes the line's set.
+  - The web UI syncs before applying a change (picking up any AnyList edits first),
+    then writes the item's set to its open lines. That makes the UI change the latest.
+  - A new line takes the item's set if it has one, because a line re-added from Recents
+    carries whatever stores it had when that Recent was made. An item with no stores
+    yet takes the line's.
+Lines that have been ordered are left alone. Which store a line was ordered from lives
+only here, and the line drops out when someone checks it off in AnyList.
 """
 
 import json
 import sqlite3
 from collections.abc import Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
-from .anylist import Line, ListBackend
+from .anylist import ListBackend
 from .normalize import normalize
-
-ON_THE_WAY = "On the way"
-
-
-def in_person_name(store_name: str) -> str:
-    return f"{store_name} (in person)"
-
-
-@dataclass(frozen=True)
-class Placement:
-    store_id: int
-    in_person: bool
 
 
 @dataclass
 class SyncReport:
     lines: int = 0
-    writes: dict[str, list[str]] = field(default_factory=dict)  # line name -> store names
-    unrouted: list[str] = field(default_factory=list)
-    manual: list[str] = field(default_factory=list)
     dropped: int = 0
-
-
-@dataclass
-class _Stores:
-    """Our stores plus the names AnyList uses for each placement."""
-
-    rows: dict[int, sqlite3.Row]
-
-    def anylist_name(self, p: Placement) -> str:
-        name = self.rows[p.store_id]["name"]
-        return in_person_name(name) if p.in_person else name
-
-    def placement_for(self, anylist_name: str) -> Placement | None:
-        for sid, row in self.rows.items():
-            if anylist_name == row["name"]:
-                return Placement(sid, False)
-            if anylist_name == in_person_name(row["name"]):
-                return Placement(sid, True)
-        return None
-
-
-def route(conn: sqlite3.Connection, item_id: int | None) -> Placement | None:
-    """Highest-ranked active store for an item, or None if it can't be routed."""
-    if item_id is None:
-        return None
-    row = conn.execute(
-        """
-        SELECT r.store_id, i.hand_pick
-        FROM store_rule r
-        JOIN store s ON s.id = r.store_id
-        JOIN item i ON i.id = r.item_id
-        WHERE r.item_id = ? AND s.active
-        ORDER BY r.rank, s.sort
-        LIMIT 1
-        """,
-        (item_id,),
-    ).fetchone()
-    return Placement(row["store_id"], bool(row["hand_pick"])) if row else None
+    adopted: int = 0  # items whose stores were taken from AnyList
+    written: int = 0  # lines whose stores were written to AnyList
 
 
 def _match(conn: sqlite3.Connection, name: str) -> int | None:
@@ -86,149 +38,145 @@ def _match(conn: sqlite3.Connection, name: str) -> int | None:
     return row["item_id"] if row else None
 
 
-async def sync(conn: sqlite3.Connection, backend: ListBackend, *, dry_run: bool = False):
+def item_stores(conn: sqlite3.Connection, item_id: int) -> frozenset[str]:
+    rows = conn.execute(
+        "SELECT s.name FROM item_store i JOIN store s ON s.id = i.store_id WHERE i.item_id = ?",
+        (item_id,),
+    )
+    return frozenset(r[0] for r in rows)
+
+
+def set_item_stores(
+    conn: sqlite3.Connection, item_id: int, names: Iterable[str], preferred: str | None = None
+) -> None:
+    """Replace an item's store set. With no `preferred` given, the current preferred
+    store is kept if it is still in the set, else the first store in store order."""
+    names = set(names)
+    if preferred is None:
+        row = conn.execute(
+            "SELECT s.name FROM item_store i JOIN store s ON s.id = i.store_id "
+            "WHERE i.item_id = ? AND i.preferred",
+            (item_id,),
+        ).fetchone()
+        preferred = row[0] if row and row[0] in names else None
+    rows = conn.execute(
+        "SELECT id, name FROM store WHERE name IN (SELECT value FROM json_each(?)) ORDER BY sort",
+        (json.dumps(sorted(names)),),
+    ).fetchall()
+    if rows and preferred not in names:
+        preferred = rows[0]["name"]
+    conn.execute("DELETE FROM item_store WHERE item_id = ?", (item_id,))
+    conn.executemany(
+        "INSERT INTO item_store (item_id, store_id, preferred) VALUES (?, ?, ?)",
+        [(item_id, r["id"], int(r["name"] == preferred)) for r in rows],
+    )
+
+
+def _mirror_stores(conn: sqlite3.Connection, names: list[str]) -> None:
+    """Add AnyList stores we don't know yet. They're in-person only until said otherwise."""
+    (next_sort,) = conn.execute("SELECT coalesce(max(sort) + 1, 0) FROM store").fetchone()
+    for name in names:
+        if conn.execute("SELECT 1 FROM store WHERE name = ?", (name,)).fetchone() is None:
+            conn.execute(
+                "INSERT INTO store (name, kind, sort) VALUES (?, 'offline', ?)", (name, next_sort)
+            )
+            next_sort += 1
+
+
+async def sync(conn: sqlite3.Connection, backend: ListBackend) -> SyncReport:
     snap = await backend.snapshot()
-    stores = _Stores({r["id"]: r for r in conn.execute("SELECT * FROM store")})
-    id_to_name = dict(snap.stores)
-    report = SyncReport()
+    live = [line for line in snap.lines if not line.checked]
+    live_ids = {line.id for line in live}
+    report = SyncReport(lines=len(live))
+    writes: dict[str, frozenset[str]] = {}
 
     conn.execute("BEGIN")
     try:
-        live = [line for line in snap.lines if not line.checked]
-        report.lines = len(live)
-        report.dropped = _drop_missing(conn, {line.id for line in live})
-        wanted: dict[str, frozenset[str]] = {}  # line id -> AnyList store names
+        _mirror_stores(conn, snap.stores)
+        known = [r[0] for r in conn.execute("SELECT anylist_item_id FROM list_line")]
+        gone = [(i,) for i in known if i not in live_ids]
+        conn.executemany("DELETE FROM list_line WHERE anylist_item_id = ?", gone)
+        report.dropped = len(gone)
+
         for line in live:
-            names = _reconcile(conn, stores, line, id_to_name, report)
-            if names is not None:
-                wanted[line.id] = names
-        if dry_run:
-            conn.execute("ROLLBACK")
-            return report
+            prev = conn.execute(
+                "SELECT * FROM list_line WHERE anylist_item_id = ?", (line.id,)
+            ).fetchone()
+            item_id = _match(conn, line.name)
+            target = _reconcile(conn, prev, item_id, line.stores, report)
+            if target != line.stores:
+                writes[line.id] = target
+            # Record what AnyList has now. The write below updates it once it lands, so a
+            # failed write is retried next time rather than mistaken for a person's edit.
+            conn.execute(
+                """
+                INSERT INTO list_line (anylist_item_id, name, quantity, item_id, stores)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT (anylist_item_id) DO UPDATE SET
+                    name = excluded.name, quantity = excluded.quantity,
+                    item_id = excluded.item_id, stores = excluded.stores
+                """,
+                (line.id, line.name, line.quantity, item_id, json.dumps(sorted(line.stores))),
+            )
         conn.execute("COMMIT")
     except BaseException:
         if conn.in_transaction:
             conn.execute("ROLLBACK")
         raise
 
-    if wanted:
-        name_to_id = await backend.ensure_stores(set().union(*wanted.values()))
-        await backend.set_store_ids(
-            {lid: frozenset(name_to_id[n] for n in names) for lid, names in wanted.items()}
-        )
+    await _write(conn, backend, writes)
+    report.written = len(writes)
     return report
 
 
-def _drop_missing(conn: sqlite3.Connection, live_ids: set[str]) -> int:
-    ids = [r[0] for r in conn.execute("SELECT anylist_item_id FROM list_entry")]
-    gone = [i for i in ids if i not in live_ids]
-    conn.executemany("DELETE FROM list_entry WHERE anylist_item_id = ?", [(i,) for i in gone])
-    return len(gone)
+def _reconcile(conn, prev, item_id, anylist: frozenset[str], report) -> frozenset[str]:
+    """Decide a line's stores, updating the item's set if AnyList wins."""
+    if item_id is None or (prev is not None and prev["ordered_from"] is not None):
+        return anylist
+    mine = item_stores(conn, item_id)
+    if prev is None or prev["item_id"] != item_id:  # a new line, or newly matched
+        if mine:
+            return mine
+    elif anylist == frozenset(json.loads(prev["stores"])):  # unchanged in AnyList
+        return mine
+    # Otherwise a person changed it in AnyList, or the item has no stores yet.
+    if anylist != mine:
+        set_item_stores(conn, item_id, anylist)
+        report.adopted += 1
+    return anylist
 
 
-def _reconcile(
-    conn: sqlite3.Connection,
-    stores: _Stores,
-    line: Line,
-    id_to_name: dict[str, str],
-    report: SyncReport,
-) -> frozenset[str] | None:
-    """Update one line's entry. Returns the AnyList store names to write, if any change."""
-    current = frozenset(id_to_name.get(sid, sid) for sid in line.store_ids)
-    item_id = _match(conn, line.name)
-    entry = conn.execute(
-        "SELECT * FROM list_entry WHERE anylist_item_id = ?", (line.id,)
-    ).fetchone()
-
-    if entry is None:
-        state = "needed"
-        # A line re-added from Recents can carry last cycle's "On the way". Anything
-        # else already on the line at first sight was put there by a person.
-        manual = bool(current - {ON_THE_WAY})
-    else:
-        state, manual = entry["state"], bool(entry["manual"])
-        expected = frozenset(json.loads(entry["last_written"]))
-        if current != expected:
-            manual = bool(current)
-            if state == "en_route":
-                state = "needed"
-
-    placement: Placement | None
-    write: frozenset[str] | None = None
-    if state == "en_route":
-        placement = (
-            Placement(entry["store_id"], bool(entry["in_person"])) if entry["store_id"] else None
-        )
-        target = frozenset({ON_THE_WAY})
-    elif manual:
-        placement = next(filter(None, map(stores.placement_for, sorted(current))), None)
-        target = current
-        report.manual.append(line.name)
-    else:
-        placement = route(conn, item_id)
-        target = frozenset({stores.anylist_name(placement)}) if placement else current
-        if placement is None:
-            report.unrouted.append(line.name)
-    if target != current:
-        write = target
-        report.writes[line.name] = sorted(target)
-
-    conn.execute(
-        """
-        INSERT INTO list_entry (anylist_item_id, name, quantity, item_id, state, store_id,
-                                in_person, manual, last_written)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT (anylist_item_id) DO UPDATE SET
-            name = excluded.name, quantity = excluded.quantity, item_id = excluded.item_id,
-            state = excluded.state, store_id = excluded.store_id,
-            in_person = excluded.in_person, manual = excluded.manual,
-            last_written = excluded.last_written
-        """,
-        (
-            line.id,
-            line.name,
-            line.quantity,
-            item_id,
-            state,
-            placement.store_id if placement else None,
-            int(placement.in_person) if placement else 0,
-            int(manual),
-            json.dumps(sorted(target)),
-        ),
-    )
-    return write
-
-
-async def mark_en_route(conn: sqlite3.Connection, backend: ListBackend, ids: Iterable[str]):
-    """The household added these lines to a store's cart."""
-    ids = [
-        r[0]
-        for r in conn.execute(
-            "SELECT anylist_item_id FROM list_entry WHERE state = 'needed' "
-            "AND anylist_item_id IN (SELECT value FROM json_each(?))",
-            (json.dumps(list(ids)),),
-        )
-    ]
-    if not ids:
+async def _write(conn, backend: ListBackend, writes: dict[str, frozenset[str]]) -> None:
+    if not writes:
         return
+    await backend.set_stores(writes)
     conn.executemany(
-        "UPDATE list_entry SET state = 'en_route', last_written = ? WHERE anylist_item_id = ?",
-        [(json.dumps([ON_THE_WAY]), i) for i in ids],
+        "UPDATE list_line SET stores = ? WHERE anylist_item_id = ?",
+        [(json.dumps(sorted(names)), line_id) for line_id, names in writes.items()],
     )
-    name_to_id = await backend.ensure_stores([ON_THE_WAY])
-    await backend.set_store_ids({i: frozenset({name_to_id[ON_THE_WAY]}) for i in ids})
 
 
-async def mark_delivered(conn: sqlite3.Connection, backend: ListBackend, ids: Iterable[str]):
-    ids = list(ids)
-    await backend.check_off(ids)
-    conn.executemany("DELETE FROM list_entry WHERE anylist_item_id = ?", [(i,) for i in ids])
+async def push_item_stores(conn: sqlite3.Connection, backend: ListBackend, item_id: int) -> None:
+    """Write an item's store set to its open, unordered lines."""
+    mine = item_stores(conn, item_id)
+    rows = conn.execute(
+        "SELECT anylist_item_id, stores FROM list_line WHERE item_id = ? AND ordered_from IS NULL",
+        (item_id,),
+    ).fetchall()
+    writes = {
+        r["anylist_item_id"]: mine for r in rows if frozenset(json.loads(r["stores"])) != mine
+    }
+    await _write(conn, backend, writes)
 
 
-async def mark_not_received(conn: sqlite3.Connection, backend: ListBackend, ids: Iterable[str]):
-    """Back to needed. Routing puts the line back at its store on the next sync."""
+def mark_ordered(conn: sqlite3.Connection, store_id: int, ids: Iterable[str]) -> None:
     conn.executemany(
-        "UPDATE list_entry SET state = 'needed', manual = 0 WHERE anylist_item_id = ?",
-        [(i,) for i in ids],
+        "UPDATE list_line SET ordered_from = ? WHERE anylist_item_id = ? AND ordered_from IS NULL",
+        [(store_id, i) for i in ids],
     )
-    await sync(conn, backend)
+
+
+def mark_not_received(conn: sqlite3.Connection, ids: Iterable[str]) -> None:
+    conn.executemany(
+        "UPDATE list_line SET ordered_from = NULL WHERE anylist_item_id = ?", [(i,) for i in ids]
+    )

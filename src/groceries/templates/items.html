@@ -13,11 +13,15 @@
     <tr>
       <td><a href="/items/{{ i.id }}">{{ i.name }}</a>{% if i.hand_pick %} <span class="tag">hand-pick</span>{% endif %}</td>
       <td>{{ i.aliases or '' }}</td>
-      <td>{{ i.stores or '—' }}</td>
+      <td>
+        {% if not i.preferred %}—
+        {% elif i.others > 0 %}{{ i.preferred }} <span class="hint">+{{ i.others }}</span>
+        {% else %}Only at {{ i.preferred }}{% endif %}
+      </td>
       <td>{{ i.products }}</td>
     </tr>
   {% else %}
-    <tr><td colspan="4">No items yet. They're created from the Review page as new names show up in AnyList.</td></tr>
+    <tr><td colspan="4">No items yet. Use "add a product" on a store page to make one.</td></tr>
   {% endfor %}
   </tbody>
 </table>

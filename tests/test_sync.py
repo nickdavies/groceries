@@ -1,9 +1,18 @@
 import asyncio
+import json
+import sqlite3
 
 import pytest
 
 from groceries import db
-from groceries.sync import ON_THE_WAY, mark_delivered, mark_en_route, mark_not_received, sync
+from groceries.sync import (
+    item_stores,
+    mark_not_received,
+    mark_ordered,
+    push_item_stores,
+    set_item_stores,
+    sync,
+)
 
 from .fakes import FakeList
 
@@ -23,160 +32,198 @@ def store_id(conn, name):
     return conn.execute("SELECT id FROM store WHERE name = ?", (name,)).fetchone()[0]
 
 
-def make_item(conn, name, *stores, hand_pick=False, aliases=()):
-    item_id = conn.execute(
-        "INSERT INTO item (name, hand_pick) VALUES (?, ?)", (name, int(hand_pick))
-    ).lastrowid
+def make_item(conn, name, *stores, aliases=()):
+    item_id = conn.execute("INSERT INTO item (name) VALUES (?)", (name,)).lastrowid
     for alias in (name, *aliases):
         conn.execute(
-            "INSERT INTO external_ref (source, external_id, item_id) VALUES ('anylist', ?, ?)",
-            (alias.casefold(), item_id),
+            "INSERT INTO external_ref VALUES ('anylist', ?, ?)", (alias.casefold(), item_id)
         )
-    for rank, store in enumerate(stores, start=1):
-        conn.execute(
-            "INSERT INTO store_rule (item_id, store_id, rank) VALUES (?, ?, ?)",
-            (item_id, store_id(conn, store), rank),
-        )
+    if stores:
+        set_item_stores(conn, item_id, stores, preferred=stores[0])
     return item_id
 
 
-def entry(conn, line_id):
-    return conn.execute("SELECT * FROM list_entry WHERE anylist_item_id = ?", (line_id,)).fetchone()
+def preferred(conn, item_id):
+    row = conn.execute(
+        "SELECT s.name FROM item_store x JOIN store s ON s.id = x.store_id "
+        "WHERE x.item_id = ? AND x.preferred",
+        (item_id,),
+    ).fetchone()
+    return row[0] if row else None
 
 
-def test_unmatched_line_is_left_for_review(conn):
+def line(conn, line_id):
+    return conn.execute("SELECT * FROM list_line WHERE anylist_item_id = ?", (line_id,)).fetchone()
+
+
+def test_unmatched_lines_are_mirrored_untouched(conn):
     fake = FakeList()
-    fake.add("a", "Mystery thing")
-    report = run(sync(conn, fake))
-    assert report.unrouted == ["Mystery thing"]
+    fake.add("a", "kimchi", "H-Mart", quantity="2")
+    fake.add("b", "mystery")
+    run(sync(conn, fake))
     assert fake.writes == []
-    assert entry(conn, "a")["store_id"] is None
+    assert json.loads(line(conn, "a")["stores"]) == ["H-Mart"]
+    assert line(conn, "a")["quantity"] == "2"
+    kind = conn.execute("SELECT kind FROM store WHERE name = 'H-Mart'").fetchone()[0]
+    assert kind == "offline"
 
 
-def test_routes_to_first_choice_and_is_idempotent(conn):
-    make_item(conn, "Milk", "King Soopers", "Costco")
-    fake = FakeList(["King Soopers", "Costco"])
+def test_new_line_takes_the_item_stores_over_stale_recents(conn):
+    make_item(conn, "Milk", "King Soopers", "Natural Grocers")
+    fake = FakeList()
+    fake.add("a", "milk", "Costco")  # re-added from a Recent made before the change
+    run(sync(conn, fake))
+    assert fake.stores_of("a") == {"King Soopers", "Natural Grocers"}
+
+
+def test_new_line_fills_in_an_unassigned_line(conn):
+    make_item(conn, "Milk", "King Soopers")
+    fake = FakeList()
     fake.add("a", "milk")
     run(sync(conn, fake))
-    assert fake.store_names("a") == {"King Soopers"}
+    assert fake.stores_of("a") == {"King Soopers"}
     run(sync(conn, fake))
     assert len(fake.writes) == 1
 
 
-def test_alias_and_whitespace_match(conn):
-    make_item(conn, "Onion", "King Soopers", aliases=["yellow onions"])
+def test_item_without_stores_adopts_the_line(conn):
+    item_id = make_item(conn, "Halloumi")
     fake = FakeList()
-    fake.add("a", "  Yellow   Onions ")
+    fake.add("a", "halloumi", "Natural Grocers", "King Soopers")
     run(sync(conn, fake))
-    assert fake.store_names("a") == {"King Soopers"}
+    assert fake.writes == []
+    assert item_stores(conn, item_id) == {"Natural Grocers", "King Soopers"}
+    assert preferred(conn, item_id) == "King Soopers"  # first in store order
 
 
-def test_skipped_store_falls_through_to_next_choice(conn):
-    make_item(conn, "Paper towels", "Costco", "King Soopers")
-    conn.execute("UPDATE store SET active = 0 WHERE name = 'Costco'")
-    fake = FakeList()
-    fake.add("a", "paper towels")
-    run(sync(conn, fake))
-    assert fake.store_names("a") == {"King Soopers"}
-
-
-def test_hand_pick_goes_to_in_person_store(conn):
-    make_item(conn, "Steak", "King Soopers", hand_pick=True)
-    fake = FakeList()
-    fake.add("a", "steak")
-    run(sync(conn, fake))
-    assert fake.store_names("a") == {"King Soopers (in person)"}
-    assert entry(conn, "a")["in_person"] == 1
-
-
-def test_human_reassignment_wins(conn):
-    make_item(conn, "Milk", "King Soopers")
+def test_change_in_anylist_wins_and_updates_the_item(conn):
+    item_id = make_item(conn, "Milk", "King Soopers", "Natural Grocers")
     fake = FakeList()
     fake.add("a", "milk")
     run(sync(conn, fake))
-    fake.set_by_hand("a", "Costco")
+    fake.set_by_hand("a", "Natural Grocers")
     report = run(sync(conn, fake))
-    assert fake.store_names("a") == {"Costco"}
-    assert report.manual == ["milk"]
-    e = entry(conn, "a")
-    assert e["manual"] == 1 and e["store_id"] == store_id(conn, "Costco")
-    # Clearing the store by hand hands the line back to routing.
+    assert report.adopted == 1
+    assert item_stores(conn, item_id) == {"Natural Grocers"}
+    assert preferred(conn, item_id) == "Natural Grocers"
+    assert fake.stores_of("a") == {"Natural Grocers"}
+
+
+def test_preferred_survives_when_anylist_adds_a_store(conn):
+    item_id = make_item(conn, "Milk", "Natural Grocers")
+    fake = FakeList()
+    fake.add("a", "milk")
+    run(sync(conn, fake))
+    fake.set_by_hand("a", "Natural Grocers", "King Soopers")
+    run(sync(conn, fake))
+    assert preferred(conn, item_id) == "Natural Grocers"
+
+
+def test_clearing_stores_in_anylist_clears_the_item(conn):
+    item_id = make_item(conn, "Milk", "King Soopers")
+    fake = FakeList()
+    fake.add("a", "milk")
+    run(sync(conn, fake))
     fake.set_by_hand("a")
     run(sync(conn, fake))
-    assert fake.store_names("a") == {"King Soopers"}
+    assert item_stores(conn, item_id) == set()
+    assert preferred(conn, item_id) is None
 
 
-def test_store_set_before_first_sync_is_manual(conn):
-    make_item(conn, "Milk", "King Soopers")
-    fake = FakeList()
-    fake.add("a", "milk", "H-Mart")
-    run(sync(conn, fake))
-    assert fake.store_names("a") == {"H-Mart"}
-    assert entry(conn, "a")["store_id"] is None  # not a store we shop online
-
-
-def test_stale_on_the_way_from_recents_is_rerouted(conn):
-    make_item(conn, "Milk", "King Soopers")
-    fake = FakeList()
-    fake.add("a", "milk", ON_THE_WAY)
-    run(sync(conn, fake))
-    assert fake.store_names("a") == {"King Soopers"}
-    assert entry(conn, "a")["manual"] == 0
-
-
-def test_cart_delivery_lifecycle(conn):
-    make_item(conn, "Milk", "King Soopers")
-    make_item(conn, "Eggs", "King Soopers")
+def test_ui_change_is_pushed_to_open_lines(conn):
+    item_id = make_item(conn, "Milk", "King Soopers")
     fake = FakeList()
     fake.add("a", "milk")
-    fake.add("b", "eggs")
+    fake.add("b", "Milk")
     run(sync(conn, fake))
+    set_item_stores(conn, item_id, {"Costco"}, preferred="Costco")
+    run(push_item_stores(conn, fake, item_id))
+    assert fake.stores_of("a") == fake.stores_of("b") == {"Costco"}
+    run(sync(conn, fake))  # our own write isn't mistaken for a person's edit
+    assert item_stores(conn, item_id) == {"Costco"}
 
-    run(mark_en_route(conn, fake, ["a", "b"]))
-    assert fake.store_names("a") == {ON_THE_WAY}
-    run(sync(conn, fake))  # stays on the way, no rewrite
-    assert fake.store_names("a") == {ON_THE_WAY}
-    assert entry(conn, "a")["state"] == "en_route"
-    assert entry(conn, "a")["store_id"] == store_id(conn, "King Soopers")
 
-    run(mark_not_received(conn, fake, ["b"]))
-    assert fake.store_names("b") == {"King Soopers"}
-    assert entry(conn, "b")["state"] == "needed"
-
-    run(mark_delivered(conn, fake, ["a"]))
-    assert fake.lines["a"].checked
-    assert entry(conn, "a") is None
+def test_failed_write_is_retried_not_adopted(conn):
+    item_id = make_item(conn, "Milk", "King Soopers")
+    fake = FakeList()
+    fake.add("a", "milk")
+    fake.fail_writes = True
+    with pytest.raises(ConnectionError):
+        run(sync(conn, fake))
+    fake.fail_writes = False
     run(sync(conn, fake))
-    assert entry(conn, "a") is None
+    assert fake.stores_of("a") == {"King Soopers"}
+    assert item_stores(conn, item_id) == {"King Soopers"}
 
 
-def test_moving_an_en_route_line_by_hand_makes_it_needed(conn):
-    make_item(conn, "Milk", "King Soopers")
+def test_newly_linked_line_is_treated_as_new(conn):
+    fake = FakeList()
+    fake.add("a", "yellow onions")
+    run(sync(conn, fake))
+    make_item(conn, "Onion", "King Soopers", aliases=["yellow onions"])
+    run(sync(conn, fake))
+    assert fake.stores_of("a") == {"King Soopers"}
+
+
+def test_ordered_lines_are_left_alone(conn):
+    item_id = make_item(conn, "Milk", "King Soopers")
     fake = FakeList()
     fake.add("a", "milk")
     run(sync(conn, fake))
-    run(mark_en_route(conn, fake, ["a"]))
-    fake.set_by_hand("a", "Costco")
+    mark_ordered(conn, store_id(conn, "King Soopers"), ["a"])
+    set_item_stores(conn, item_id, {"Costco"}, preferred="Costco")
+    run(push_item_stores(conn, fake, item_id))
+    assert fake.stores_of("a") == {"King Soopers"}
     run(sync(conn, fake))
-    e = entry(conn, "a")
-    assert (e["state"], e["manual"]) == ("needed", 1)
+    assert fake.stores_of("a") == {"King Soopers"}
+    assert line(conn, "a")["ordered_from"] == store_id(conn, "King Soopers")
+
+    mark_not_received(conn, ["a"])  # back to needed: the item's current stores apply
+    run(sync(conn, fake))
+    assert fake.stores_of("a") == {"Costco"}
 
 
-def test_line_checked_in_anylist_is_dropped(conn):
-    make_item(conn, "Milk", "King Soopers")
+def test_checked_off_line_is_dropped(conn):
     fake = FakeList()
-    fake.add("a", "milk")
+    fake.add("a", "milk", "King Soopers")
     run(sync(conn, fake))
-    run(fake.check_off(["a"]))
+    fake.check_off("a")
     report = run(sync(conn, fake))
-    assert report.dropped == 1 and entry(conn, "a") is None
+    assert report.dropped == 1 and line(conn, "a") is None
 
 
-def test_dry_run_writes_nothing(conn):
-    make_item(conn, "Milk", "King Soopers")
+def test_ordering_twice_keeps_the_first_store(conn):
     fake = FakeList()
-    fake.add("a", "milk")
-    report = run(sync(conn, fake, dry_run=True))
-    assert report.writes == {"milk": ["King Soopers"]}
-    assert fake.writes == []
-    assert entry(conn, "a") is None
+    fake.add("a", "milk", "King Soopers", "Natural Grocers")
+    run(sync(conn, fake))
+    mark_ordered(conn, store_id(conn, "Natural Grocers"), ["a"])
+    mark_ordered(conn, store_id(conn, "King Soopers"), ["a"])
+    assert line(conn, "a")["ordered_from"] == store_id(conn, "Natural Grocers")
+
+
+def test_migration_from_v1_keeps_settings_rules_and_ordered_lines(tmp_path):
+    path = tmp_path / "g.db"
+    old = sqlite3.connect(path, isolation_level=None)
+    old.executescript(f"BEGIN;\n{db.MIGRATIONS[0]};\nPRAGMA user_version = 1;\nCOMMIT;")
+    old.execute("INSERT INTO kv VALUES ('kroger_location', '{}')")
+    old.execute("INSERT INTO item (name, hand_pick) VALUES ('Milk', 1)")
+    old.execute("INSERT INTO product (item_id, store_id, label, url) VALUES (1, 1, 'M', 'u')")
+    old.execute("INSERT INTO store_rule VALUES (1, 3, 1), (1, 1, 2)")
+    old.execute(
+        "INSERT INTO list_entry (anylist_item_id, name, item_id, state, store_id) "
+        "VALUES ('a', 'milk', 1, 'en_route', 1), ('b', 'eggs', NULL, 'needed', 1)"
+    )
+    old.close()
+
+    conn = db.connect(path)
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == len(db.MIGRATIONS)
+    assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+    assert conn.execute("SELECT value FROM kv").fetchone()[0] == "{}"
+    assert conn.execute("SELECT count(*) FROM product").fetchone()[0] == 1
+    assert conn.execute("SELECT hand_pick FROM item").fetchone()[0] == 1
+    assert item_stores(conn, 1) == {"King Soopers", "Natural Grocers"}
+    assert preferred(conn, 1) == "Natural Grocers"
+    rows = {r["anylist_item_id"]: r for r in conn.execute("SELECT * FROM list_line")}
+    assert rows["a"]["ordered_from"] == 1 and rows["b"]["ordered_from"] is None
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("INSERT INTO store (name, kind, sort) VALUES ('X', 'bogus', 9)")

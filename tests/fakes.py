@@ -1,5 +1,3 @@
-from collections.abc import Iterable, Mapping
-
 from groceries.anylist import Line, Snapshot
 from groceries.kroger import Location, Product
 
@@ -20,48 +18,48 @@ class FakeKroger:
 
 
 class FakeList:
-    """In-memory stand-in for one AnyList list. Records every write."""
+    """In-memory stand-in for one AnyList list. `add`, `set_by_hand` and `check_off` are
+    a person using the app; `set_stores` is our writes, which are recorded."""
 
-    def __init__(self, stores: Iterable[str] = ()):
-        self.stores: dict[str, str] = {f"s-{n}": n for n in stores}
+    def __init__(self, stores=("King Soopers", "Costco", "Natural Grocers", "Total Beverage")):
+        self.stores: list[str] = list(stores)
         self.lines: dict[str, Line] = {}
         self.writes: list[dict[str, frozenset[str]]] = []
+        self.fail_writes = False
+
+    def _replace(self, line_id: str, **changes) -> None:
+        line = self.lines[line_id]
+        fields = {
+            "id": line.id,
+            "name": line.name,
+            "quantity": line.quantity,
+            "checked": line.checked,
+            "stores": line.stores,
+            **changes,
+        }
+        self.lines[line_id] = Line(**fields)
 
     def add(self, line_id: str, name: str, *stores: str, quantity: str = "") -> None:
-        ids = frozenset(self.id_of(s) for s in stores)
-        self.lines[line_id] = Line(line_id, name, quantity, False, ids)
-
-    def id_of(self, store_name: str) -> str:
-        for sid, name in self.stores.items():
-            if name == store_name:
-                return sid
-        sid = f"s-{store_name}"
-        self.stores[sid] = store_name
-        return sid
-
-    def store_names(self, line_id: str) -> set[str]:
-        return {self.stores[s] for s in self.lines[line_id].store_ids}
+        self.stores += [s for s in stores if s not in self.stores]
+        self.lines[line_id] = Line(line_id, name, quantity, False, frozenset(stores))
 
     def set_by_hand(self, line_id: str, *stores: str) -> None:
-        line = self.lines[line_id]
-        ids = frozenset(self.id_of(s) for s in stores)
-        self.lines[line_id] = Line(line.id, line.name, line.quantity, line.checked, ids)
+        self.stores += [s for s in stores if s not in self.stores]
+        self._replace(line_id, stores=frozenset(stores))
+
+    def check_off(self, line_id: str) -> None:
+        self._replace(line_id, checked=True)
+
+    def stores_of(self, line_id: str) -> set[str]:
+        return set(self.lines[line_id].stores)
 
     async def snapshot(self) -> Snapshot:
-        return Snapshot(list(self.lines.values()), dict(self.stores))
+        return Snapshot(list(self.lines.values()), list(self.stores))
 
-    async def ensure_stores(self, names: Iterable[str]) -> dict[str, str]:
-        for n in names:
-            self.id_of(n)
-        return {name: sid for sid, name in self.stores.items()}
-
-    async def set_store_ids(self, changes: Mapping[str, frozenset[str]]) -> None:
+    async def set_stores(self, changes) -> None:
+        if self.fail_writes:
+            raise ConnectionError("AnyList unreachable")
         self.writes.append(dict(changes))
-        for line_id, ids in changes.items():
-            line = self.lines[line_id]
-            self.lines[line_id] = Line(line.id, line.name, line.quantity, line.checked, ids)
-
-    async def check_off(self, line_ids: Iterable[str]) -> None:
-        for i in line_ids:
-            line = self.lines[i]
-            self.lines[i] = Line(line.id, line.name, line.quantity, True, line.store_ids)
+        for line_id, names in changes.items():
+            self.stores += [s for s in names if s not in self.stores]
+            self._replace(line_id, stores=frozenset(names))

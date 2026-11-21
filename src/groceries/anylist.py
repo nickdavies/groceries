@@ -1,14 +1,15 @@
 """The slice of AnyList the app uses, behind a small interface so sync logic is testable.
 
-`ListBackend` is what sync talks to. `AnyListBackend` implements it with aioanylist
+The app reads the list and writes one thing back: which stores each line has.
+`ListBackend` is what sync talks to, and `AnyListBackend` implements it with aioanylist
 against one named shopping list. AnyList stores are per-list, so store ids are only
-meaningful within that list.
+meaningful within that list. Everything above this module speaks in store names.
 """
 
 import json
 import logging
 import sqlite3
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -28,27 +29,21 @@ class Line:
     name: str
     quantity: str
     checked: bool
-    store_ids: frozenset[str]
+    stores: frozenset[str]  # store names
 
 
 @dataclass(frozen=True)
 class Snapshot:
     lines: list[Line]
-    stores: dict[str, str]  # AnyList store id -> store name
+    stores: list[str]  # every store name on the list, in AnyList's order
 
 
 class ListBackend(Protocol):
     async def snapshot(self) -> Snapshot: ...
 
-    async def ensure_stores(self, names: Iterable[str]) -> dict[str, str]:
-        """Create any missing stores. Returns name -> id for every store on the list."""
+    async def set_stores(self, changes: Mapping[str, frozenset[str]]) -> None:
+        """Make each line's stores exactly the named set, creating missing stores."""
         ...
-
-    async def set_store_ids(self, changes: Mapping[str, frozenset[str]]) -> None:
-        """Make each line's store set exactly the given set."""
-        ...
-
-    async def check_off(self, line_ids: Iterable[str]) -> None: ...
 
 
 def _quantity(item) -> str:
@@ -68,52 +63,47 @@ class AnyListBackend:
             raise RuntimeError(f"expected one AnyList list named {self._list_name!r}")
         return matches[0]
 
-    def _stores(self, list_id: str) -> dict[str, str]:
-        return {sid: s.name for sid, s in self._client.state.list_stores.get(list_id, {}).items()}
+    def _store_map(self, list_id: str) -> dict[str, PBStore]:
+        return self._client.state.list_stores.get(list_id, {})
 
     async def snapshot(self) -> Snapshot:
         await self._client.refresh()
         lst = self._list()
+        stores = self._store_map(lst.identifier)
         lines = [
             Line(
                 id=i.identifier,
                 name=i.name,
                 quantity=_quantity(i),
                 checked=bool(i.checked),
-                store_ids=frozenset(i.storeIds),
+                stores=frozenset(stores[s].name for s in i.storeIds if s in stores),
             )
             for i in lst.items
         ]
-        return Snapshot(lines=lines, stores=self._stores(lst.identifier))
+        ordered = sorted(stores.values(), key=lambda s: s.sortIndex)
+        return Snapshot(lines=lines, stores=[s.name for s in ordered])
 
-    async def ensure_stores(self, names: Iterable[str]) -> dict[str, str]:
+    async def set_stores(self, changes: Mapping[str, frozenset[str]]) -> None:
         list_id = self._list().identifier
-        by_name = {name: sid for sid, name in self._stores(list_id).items()}
-        for name in sorted(set(names) - by_name.keys()):
+        by_name = {s.name: sid for sid, s in self._store_map(list_id).items()}
+        for name in sorted(set().union(*changes.values()) - by_name.keys()):
             log.info("creating AnyList store %r", name)
+            sid = uuid4_hex()
             await self._client.lists.save_store(
-                list_id, PBStore(identifier=uuid4_hex(), name=name), is_new=True, flush=False
+                list_id, PBStore(identifier=sid, name=name), is_new=True, flush=False
             )
-        await self._client.flush()
-        return {name: sid for sid, name in self._stores(list_id).items()}
-
-    async def set_store_ids(self, changes: Mapping[str, frozenset[str]]) -> None:
-        list_id = self._list().identifier
-        for line_id, wanted in changes.items():
+            by_name[name] = sid
+        for line_id, names in changes.items():
             item = self._client.lists.item(list_id, line_id)
             if item is None:
                 continue
             current = set(item.storeIds)
+            wanted = {by_name[n] for n in names}
             for sid in current - wanted:
                 await self._client.lists.remove_store(list_id, line_id, sid, flush=False)
             for sid in wanted - current:
                 await self._client.lists.add_store(list_id, line_id, sid, flush=False)
         await self._client.flush()
-
-    async def check_off(self, line_ids: Iterable[str]) -> None:
-        ids = list(line_ids)
-        if ids:
-            await self._client.lists.bulk_set_checked(self._list().identifier, ids, True)
 
 
 async def connect(conn: sqlite3.Connection, email: str, password: str) -> AnyListClient:

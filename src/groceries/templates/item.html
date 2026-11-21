@@ -5,28 +5,32 @@
 
 <form method="post" action="/items/{{ item.id }}">
   <label>Name <input name="name" value="{{ item.name }}" required></label>
-  <label class="check"><input type="checkbox" name="hand_pick" {{ 'checked' if item.hand_pick }}>
-    Hand-pick in person (never ordered for delivery)</label>
-  <h2>Where to buy it</h2>
-  <p class="hint">1 = first choice. If that store is skipped, the next choice is used. Leave blank for "never".</p>
+  <label class="check"><input type="checkbox" name="hand_pick" value="true" {{ 'checked' if item.hand_pick }}>
+    Hand-pick in person (never ordered online)</label>
+  <button class="small">Save</button>
+</form>
+
+<h2>Stores</h2>
+<p class="hint">Saved here and in AnyList on this item's open lines. A change made in AnyList comes back here too, and whichever change is newer wins. One store only means "only at".</p>
+<form method="post" action="/items/{{ item.id }}/stores">
   <table>
+    <thead><tr><th>Store</th><th>Preferred</th><th>Also available</th></tr></thead>
     <tbody>
     {% for s in stores %}
       <tr>
-        <td>{{ s.name }}{% if not s.active %} <span class="tag">skipped</span>{% endif %}</td>
-        <td>
-          <select name="rank_{{ s.id }}">
-            <option value="">—</option>
-            {% for n in range(1, stores|length + 1) %}
-              <option value="{{ n }}" {{ 'selected' if s.rank == n }}>{{ n }}</option>
-            {% endfor %}
-          </select>
-        </td>
+        <td>{{ s.name }}{% if s.kind == 'offline' %} <span class="tag">in person</span>{% endif %}</td>
+        <td><input type="radio" name="preferred" value="{{ s.name }}" {{ 'checked' if s.preferred }}></td>
+        <td><input type="checkbox" name="stores" value="{{ s.name }}" {{ 'checked' if s.allowed and not s.preferred }}></td>
       </tr>
     {% endfor %}
+      <tr>
+        <td class="hint">No stores</td>
+        <td><input type="radio" name="preferred" value="" {{ 'checked' if not stores|selectattr('preferred')|list }}></td>
+        <td></td>
+      </tr>
     </tbody>
   </table>
-  <button>Save</button>
+  <button class="small">Save stores</button>
 </form>
 
 <h2>AnyList names</h2>
@@ -47,7 +51,7 @@
 </form>
 
 <h2>Products</h2>
-{% for s in stores %}
+{% for s in stores if s.allowed and s.kind != 'offline' %}
 <section>
   <h3>{{ s.name }}</h3>
   {% if products[s.id] %}
@@ -115,6 +119,8 @@
   </form>
   {% endif %}
 </section>
+{% else %}
+<p class="hint">Pick the stores this comes from first. Products are added per store.</p>
 {% endfor %}
 
 <form method="post" action="/items/{{ item.id }}/delete" onsubmit="return confirm('Delete this item?')">

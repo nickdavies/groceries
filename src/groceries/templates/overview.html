@@ -4,31 +4,25 @@
 <form method="post" action="/sync"><button>Sync with AnyList now</button></form>
 
 <table>
-  <thead><tr><th>Store</th><th>To order</th><th>In person</th><th>On the way</th><th>Using</th></tr></thead>
+  <thead><tr><th>Store</th><th>To order</th><th>Pick in person</th><th>On the way</th></tr></thead>
   <tbody>
   {% for s in stores %}
+    {% set lines = by_store[s.id] %}
     <tr>
       <td><a href="/stores/{{ s.id }}">{{ s.name }}</a></td>
-      <td>{{ s.deliver }}</td>
-      <td>{{ s.in_person }}</td>
-      <td>{{ s.en_route }}</td>
-      <td>
-        <form method="post" action="/stores/{{ s.id }}/active">
-          <input type="hidden" name="active" value="{{ 'false' if s.active else 'true' }}">
-          <button class="small">{{ 'Yes — skip it' if s.active else 'Skipped — use it' }}</button>
-        </form>
-      </td>
+      <td>{{ lines.to_order|length }}{% if lines.also %} <span class="hint">(+{{ lines.also|length }} also here)</span>{% endif %}</td>
+      <td>{{ lines.in_person|length }}</td>
+      <td>{% if s.on_the_way %}<a href="/on-the-way">{{ s.on_the_way }}</a>{% else %}0{% endif %}</td>
     </tr>
   {% endfor %}
   </tbody>
 </table>
-<p class="hint">Skipping a store sends its items to each item's next-choice store.</p>
 
-{% if review %}<p><a href="/review">{{ review }} item{{ 's' if review != 1 }} need review</a></p>{% endif %}
+{% if unassigned %}
+<p class="hint">{{ unassigned }} line{{ 's' if unassigned != 1 }} on the list {{ 'have' if unassigned != 1 else 'has' }} no store yet.</p>
+{% endif %}
 
 {% if svc.last_sync %}
-<p class="hint">Last sync: {{ svc.last_sync.lines }} open lines,
-  {{ svc.last_sync.writes|length }} store changes written,
-  {{ svc.last_sync.manual|length }} set by hand in AnyList.</p>
+<p class="hint">Last sync: {{ svc.last_sync.lines }} open lines.</p>
 {% endif %}
 {% endblock %}

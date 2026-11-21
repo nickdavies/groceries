@@ -88,6 +88,54 @@ MIGRATIONS = [
         value TEXT NOT NULL
     );
     """,
+    """
+    -- Stores mirror the AnyList list's stores. 'offline' ones (bought in person only,
+    -- e.g. H-Mart) get no page, but keep an item's store set the same as AnyList's.
+    CREATE TABLE store_v2 (
+        id INTEGER PRIMARY KEY,
+        name TEXT NOT NULL UNIQUE,
+        kind TEXT NOT NULL CHECK (kind IN ('kroger', 'manual', 'offline')),
+        sort INTEGER NOT NULL
+    );
+    INSERT INTO store_v2 (id, name, kind, sort) SELECT id, name, kind, sort FROM store;
+    DROP TABLE store;
+    ALTER TABLE store_v2 RENAME TO store;
+
+    -- The stores an item can come from, with at most one marked preferred (the code
+    -- keeps exactly one while the set is non-empty). The same set is written to the
+    -- item's AnyList lines, and a change on either side wins over the other.
+    CREATE TABLE item_store (
+        item_id INTEGER NOT NULL REFERENCES item(id) ON DELETE CASCADE,
+        store_id INTEGER NOT NULL REFERENCES store(id) ON DELETE CASCADE,
+        preferred INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (item_id, store_id)
+    );
+    CREATE UNIQUE INDEX item_store_one_preferred ON item_store (item_id) WHERE preferred;
+    INSERT INTO item_store (item_id, store_id, preferred)
+        SELECT item_id, store_id,
+               row_number() OVER (PARTITION BY item_id ORDER BY rank, store_id) = 1
+        FROM store_rule;
+    DROP TABLE store_rule;
+
+    -- One row per unchecked line on the AnyList list.
+    --   stores: JSON list of the line's AnyList store names as last seen or written.
+    --     If AnyList differs at the next sync, a person changed them there.
+    --   ordered_from: the store it was ordered from, NULL while still needed. The
+    --     line drops out when someone checks it off in AnyList.
+    CREATE TABLE list_line (
+        anylist_item_id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        quantity TEXT NOT NULL DEFAULT '',
+        item_id INTEGER REFERENCES item(id) ON DELETE SET NULL,
+        stores TEXT NOT NULL DEFAULT '[]',
+        ordered_from INTEGER REFERENCES store(id) ON DELETE SET NULL
+    );
+    INSERT INTO list_line (anylist_item_id, name, quantity, item_id, ordered_from)
+        SELECT anylist_item_id, name, quantity, item_id,
+               CASE WHEN state = 'en_route' THEN store_id END
+        FROM list_entry;
+    DROP TABLE list_entry;
+    """,
 ]
 
 
@@ -102,11 +150,23 @@ def connect(path: Path | str) -> sqlite3.Connection:
 
 def migrate(conn: sqlite3.Connection) -> None:
     (version,) = conn.execute("PRAGMA user_version").fetchone()
-    for i, sql in enumerate(MIGRATIONS[version:], start=version + 1):
-        # The script carries its own transaction so a failed migration leaves no trace.
-        try:
-            conn.executescript(f"BEGIN;\n{sql};\nPRAGMA user_version = {i};\nCOMMIT;")
-        except BaseException:
-            if conn.in_transaction:
-                conn.execute("ROLLBACK")
-            raise
+    if version == len(MIGRATIONS):
+        return
+    # Rebuilding a table means dropping it, which with foreign keys on would cascade
+    # into the tables that reference it. They can only be switched outside a
+    # transaction, and are checked once all migrations have run.
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        for i, sql in enumerate(MIGRATIONS[version:], start=version + 1):
+            # The script carries its own transaction so a failed migration leaves no trace.
+            try:
+                conn.executescript(f"BEGIN;\n{sql};\nPRAGMA user_version = {i};\nCOMMIT;")
+            except BaseException:
+                if conn.in_transaction:
+                    conn.execute("ROLLBACK")
+                raise
+        broken = conn.execute("PRAGMA foreign_key_check").fetchall()
+        if broken:
+            raise RuntimeError(f"foreign key violations after migrating: {broken}")
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")

@@ -1,19 +1,25 @@
 # groceries
 
-Routes items on a shared AnyList list to the stores we buy them from, and gives each store
-a page of product links to add to its online cart.
+Order-time companion to a shared AnyList list. AnyList stays where the household adds
+things and sets stores. This app gives each store a page of product links to add to its
+online cart, and remembers what has been ordered.
 
-- **Routing.** Each item has a ranked list of stores it may come from. The first store that
-  isn't skipped wins, and the line is assigned to that store in AnyList. Hand-pick items
-  (steaks, delicate produce) go to "<store> (in person)" instead, so AnyList's own store
-  filter is the trip list.
-- **Manual override.** If someone changes a line's store in the AnyList app, routing leaves
-  that line alone. Clearing its store hands it back.
-- **Three states.** AnyList only has checked/unchecked. Lines added to a cart move to the
-  "On the way" store. "Delivered" checks them off. "Didn't arrive" puts them back.
+- **Stores.** Each item has a preferred store and any number of "also available" stores,
+  and AnyList holds the same set on the item's lines. Changing it in either place updates
+  the other, and the newer change wins. A new line takes the item's stores, since a line
+  re-added from Recents can carry stale ones. An item with no stores yet takes the line's.
+- **Store pages.** A line is listed under "To order" at its preferred store, and under
+  "Also available here" at its other stores. Ordering it from any of them takes it off
+  all of them.
+- **Hand-pick.** Items flagged hand-pick (steaks, delicate produce) are never in an order
+  list. They're listed under "Pick in person" at their preferred store.
+- **On the way.** "Mark ordered" is tracked only here. Check items off in AnyList when
+  they arrive, and they drop off on the next sync. "Didn't arrive" puts a line back.
 - **Matching.** AnyList item IDs change every shopping cycle, so lines match our items by
   normalized name. Each item can have several AnyList names and several products per store.
   King Soopers products come from the Kroger API search. Other stores take pasted links.
+- **Other stores.** AnyList stores we don't order from online (H-Mart, Safeway) are kept in
+  an item's store set but get no page.
 
 ## Develop
 

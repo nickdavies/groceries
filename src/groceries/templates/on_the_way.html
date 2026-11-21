@@ -2,27 +2,18 @@
 {% block title %}On the way{% endblock %}
 {% block content %}
 <h1>On the way</h1>
-{% for store, entries in groups.items() %}
+<p class="hint">Check items off in AnyList when they arrive. They drop off this page on the next sync.</p>
+{% for store, lines in groups.items() %}
 <section>
-  <h2>{{ store }} ({{ entries|length }})</h2>
-  <form method="post" action="/entries/delivered">
-    {% for e in entries %}<input type="hidden" name="ids" value="{{ e.anylist_item_id }}">{% endfor %}
-    <button>All delivered — check off in AnyList</button>
-  </form>
+  <h2>{{ store }} ({{ lines|length }})</h2>
   <table>
     <tbody>
-    {% for e in entries %}
+    {% for l in lines %}
       <tr>
-        <td>{{ e.name }}{% if e.quantity %} × {{ e.quantity }}{% endif %}</td>
+        <td>{{ l.name }}{% if l.quantity %} × {{ l.quantity }}{% endif %}</td>
         <td>
-          <form method="post" action="/entries/delivered">
-            <input type="hidden" name="ids" value="{{ e.anylist_item_id }}">
-            <button class="small">Delivered</button>
-          </form>
-        </td>
-        <td>
-          <form method="post" action="/entries/not-received">
-            <input type="hidden" name="ids" value="{{ e.anylist_item_id }}">
+          <form method="post" action="/lines/not-received">
+            <input type="hidden" name="ids" value="{{ l.anylist_item_id }}">
             <button class="small secondary">Didn't arrive</button>
           </form>
         </td>
