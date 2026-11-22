@@ -8,8 +8,10 @@
   <title>{% block title %}Groceries{% endblock %}</title>
   <link rel="stylesheet" href="{{ wa }}/styles/webawesome.css">
   <script type="module" src="{{ wa }}/webawesome.loader.js"></script>
-  <script src="{{ url_for('static', path='app.js') }}"></script>
-  <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}">
+  {# Root-relative on purpose: behind the TLS-terminating gateway the app sees http, so
+     url_for() would build http:// URLs that browsers block as mixed content. #}
+  <script src="/static/app.js"></script>
+  <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
   {% set path = request.url.path %}

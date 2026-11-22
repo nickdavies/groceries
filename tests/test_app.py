@@ -251,7 +251,10 @@ def test_every_page_renders(env):
     fake.add("a", "milk", "King Soopers", "H-Mart")
     client.post("/sync")
     for path in ["/", "/items", f"/items/{item_of(conn, 'a')}", "/settings", "/healthz"]:
-        assert client.get(path).status_code == 200, path
+        response = client.get(path)
+        assert response.status_code == 200, path
+        # Absolute URLs take the scheme the app sees, http behind the gateway: mixed content.
+        assert "http://testserver" not in response.text, path
 
 
 def test_kroger_search_runs_on_open_once_a_store_is_picked(env):
