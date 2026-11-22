@@ -104,7 +104,9 @@ async def _sync_loop(svc: Services, interval: float) -> None:
 async def lifespan(app: FastAPI):
     env = os.environ
     conn = db.connect(env.get("GROCERIES_DB", "/data/groceries.db"))
-    client = await anylist.connect(conn, env["ANYLIST_EMAIL"], env["ANYLIST_PASSWORD"])
+    client = await anylist.connect(
+        anylist.DbTokens(conn), env["ANYLIST_EMAIL"], env["ANYLIST_PASSWORD"]
+    )
     backend = anylist.AnyListBackend(client, env.get("ANYLIST_LIST", "Shared List"))
     kroger = None
     if env.get("KROGER_CLIENT_ID"):

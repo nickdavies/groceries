@@ -119,32 +119,55 @@ class AnyListBackend:
         await self._client.flush()
 
 
-async def connect(conn: sqlite3.Connection, email: str, password: str) -> AnyListClient:
-    """Sign in, reusing tokens cached in the database so restarts don't re-authenticate."""
+class TokenStore(Protocol):
+    """Where signed-in AnyList tokens are cached between runs, as JSON text."""
 
-    def save_tokens(tokens: AuthTokens | None) -> None:
-        if tokens is None:
-            conn.execute("DELETE FROM kv WHERE key = 'anylist_tokens'")
+    def load(self) -> str | None: ...
+
+    def save(self, value: str | None) -> None: ...
+
+
+class DbTokens:
+    """Tokens in the app database's kv table."""
+
+    def __init__(self, conn: sqlite3.Connection):
+        self._conn = conn
+
+    def load(self) -> str | None:
+        row = self._conn.execute("SELECT value FROM kv WHERE key = 'anylist_tokens'").fetchone()
+        return row["value"] if row else None
+
+    def save(self, value: str | None) -> None:
+        if value is None:
+            self._conn.execute("DELETE FROM kv WHERE key = 'anylist_tokens'")
             return
-        value = json.dumps(
-            {
-                "user_id": tokens.user_id,
-                "access_token": tokens.access_token,
-                "refresh_token": tokens.refresh_token,
-                "is_premium_user": tokens.is_premium_user,
-                "user_locale": tokens.user_locale,
-            }
-        )
-        conn.execute(
+        self._conn.execute(
             "INSERT INTO kv (key, value) VALUES ('anylist_tokens', ?) "
             "ON CONFLICT (key) DO UPDATE SET value = excluded.value",
             (value,),
         )
 
-    row = conn.execute("SELECT value FROM kv WHERE key = 'anylist_tokens'").fetchone()
-    if row is not None:
+
+async def connect(store: TokenStore, email: str, password: str) -> AnyListClient:
+    """Sign in, reusing cached tokens so restarts don't re-authenticate."""
+
+    def save_tokens(tokens: AuthTokens | None) -> None:
+        if tokens is None:
+            store.save(None)
+            return
+        value = {
+            "user_id": tokens.user_id,
+            "access_token": tokens.access_token,
+            "refresh_token": tokens.refresh_token,
+            "is_premium_user": tokens.is_premium_user,
+            "user_locale": tokens.user_locale,
+        }
+        store.save(json.dumps(value))
+
+    cached = store.load()
+    if cached is not None:
         client = AnyListClient(
-            tokens=AuthTokens(**json.loads(row["value"])),
+            tokens=AuthTokens(**json.loads(cached)),
             user_email=email,
             token_callback=save_tokens,
         )

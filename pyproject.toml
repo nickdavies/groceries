@@ -5,9 +5,11 @@ description = "Routes AnyList items to stores and builds per-store shopping link
 requires-python = ">=3.13"
 dependencies = [
     "aioanylist==1.0.2",
+    "aiohttp>=3.11",
     "fastapi>=0.115",
     "httpx>=0.28",
     "jinja2>=3.1",
+    "prometheus-client>=0.21",
     "python-multipart>=0.0.20",
     "uvicorn>=0.34",
 ]

@@ -59,3 +59,55 @@ GROCERIES_DB=./dev.db op run --env-file dev.env -- uv run uvicorn groceries.app:
 | `SYNC_INTERVAL` | Seconds between background syncs (default 300) |
 
 The app has no authentication of its own. It expects to sit behind a forward-auth proxy.
+
+## Recipe backup
+
+`python -m groceries.backup` saves every AnyList recipe the account can see, with its
+photos, to a volume of its own. It is meant to run every 30 minutes as a CronJob, with
+VolSync backing up the volume. It only reads from AnyList.
+
+```
+recipes/<recipe id>/<sha256>.json   one file per distinct version of a recipe (full PBRecipe)
+collections/<sha256>.json           recipe collections and their order
+photos/<sha256>.jpg                 photos, from https://photos.anylist.com/<photo id>.jpg
+photos/index.json                   photo id -> sha256
+tokens.json                         cached AnyList sign-in (mode 0600)
+```
+
+- **Content-addressed.** A file is named by the sha256 of its bytes. A recipe file is
+  canonical JSON (`MessageToDict` with field names kept, then sorted keys). An unchanged
+  recipe writes nothing.
+- **Verified.** Every run re-hashes the files it relies on, and rewrites (or downloads
+  again) any that don't match. It then re-hashes every stored file. Mismatches are logged
+  and counted in `hash_failures`.
+- **Pruned.** A file's mtime is the last time it was current. Versions that haven't been
+  current for `PRUNE_DAYS` are deleted, but never a recipe's newest file, so a recipe
+  deleted in AnyList keeps its last version. Photos that no remaining recipe file uses are
+  deleted too.
+- **Reported.** After everything else succeeds, the run pushes
+  `groceries_recipe_backup_*` gauges to the Pushgateway, job `groceries_recipe_backup`.
+  These are `recipes`, `photos`, `files_written`, `pruned`, `hash_failures` and
+  `last_success_timestamp_seconds`. A failed run pushes nothing and exits non-zero.
+
+| Variable | |
+|---|---|
+| `ANYLIST_EMAIL`, `ANYLIST_PASSWORD` | AnyList login |
+| `BACKUP_DIR` | Backup root (default `/backup`) |
+| `PRUNE_DAYS` | Days an old version is kept (default 90) |
+| `PUSHGATEWAY_URL` | Pushgateway to report to. Unset, success isn't reported. |
+
+### Restoring (planned, not implemented)
+
+There is no restore command yet. The intended procedure, if it's ever needed:
+
+1. Get the files.
+   - From the live volume: start a short-lived pod that mounts the backup PVC (it's RWO
+     and only attached while a Job runs), then `kubectl cp` out.
+   - From history: restore a VolSync snapshot.
+2. For the recipe id, take the newest `recipes/<id>/*.json` by mtime. If you're working
+   from a copy that lost mtimes, look at each version's `timestamp` field. Check that
+   `sha256sum` matches the file name.
+3. `ParseDict(json.load(f), PB.PBRecipe())`, then `await client.recipes.save(recipe)`. That
+   saves it under the same id, overwriting the current recipe or recreating a deleted one.
+   Diff the ingredients against the live recipe before saving.
+4. Re-add photos by hand from `photos/<index[photo id]>.jpg`. `save` doesn't upload them.
