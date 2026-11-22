@@ -15,6 +15,19 @@
   → <strong>“{{ f.new_name }}”</strong>{% if f.unit %}, unit “{{ f.unit }}”{% endif %}{% if f.style %}, style “{{ f.style }}”{% endif %}
 {% endmacro %}
 
+{# Where a name is used, from the last sync: up to three recipes, the rest behind "more". #}
+{% macro where(key, fallback='') %}{% set s = sources.get(key) %}
+  {%- if not s %}{{ fallback }}{% else %}
+    {%- if s.recipes %}in {{ s.recipes[:3]|join(', ') }}
+      {%- if s.recipes|length > 3 %} <details class="more"><summary>+{{ s.recipes|length - 3 }} more</summary>{{ s.recipes[3:]|join(', ') }}</details>{% endif %}
+    {%- endif %}
+    {%- if s.open or s.crossed_off %}{% if s.recipes %} · {% endif %}
+      {%- if s.open %}{{ s.open }} open{% endif %}{% if s.open and s.crossed_off %} and {% endif %}
+      {%- if s.crossed_off %}{{ s.crossed_off }} crossed-off{% endif %} {{ 'line' if s.open + s.crossed_off == 1 else 'lines' }}
+    {%- endif %}
+  {%- endif %}
+{%- endmacro %}
+
 {% macro map_fields(unit, style) %}
   <input name="unit" value="{{ unit }}" placeholder="unit (e.g. cloves)" size="10">
   <input name="style" value="{{ style }}" placeholder="style, goes in the note (e.g. minced)">
@@ -76,7 +89,8 @@
 <p class="hint">{{ hint }} Mapping a name makes the item's AnyList name canonical, and its rewrites then appear under Needs review. Nothing is written until you approve.</p>
 {% for target, group in groups %}
 <section>
-  <h3>{% if target.item_id %}<a href="/items/{{ target.item_id }}">{{ target.label }}</a>{% else %}{{ target.label }} <wa-badge variant="neutral" appearance="outlined">new item</wa-badge>{% endif %}</h3>
+  <h3>{% if target.item_id %}<a href="/items/{{ target.item_id }}">{{ target.label }}</a>{% else %}{{ target.label }} <wa-badge variant="neutral" appearance="outlined">new item</wa-badge>{% endif %}
+    <span class="hint">{{ where(target.key) }}</span></h3>
   {% for s in group %}
   <form method="post" action="/names/map" class="inline">
     <input type="hidden" name="key" value="{{ s.alias.key }}">
@@ -84,7 +98,7 @@
     <input type="hidden" name="b" value="{{ s.target.key }}">
     {% if target.item_id %}<input type="hidden" name="target_id" value="{{ target.item_id }}">
     {% else %}<input type="hidden" name="target_name" value="{{ target.label }}">{% endif %}
-    <span><strong>{{ s.alias.label }}</strong> <span class="hint">{{ s.reason }} · used {{ s.alias.count }}×
+    <span><strong>{{ s.alias.label }}</strong> <span class="hint">{{ s.reason }} · {{ where(s.alias.key, 'used %d×' % s.alias.count) }}
       {% if s.alias.item_id and s.alias.item_id != target.item_id %} · merges item “{{ s.alias.item_name }}” (its stores and products move){% endif %}</span></span>
     {{ map_fields(s.unit, s.style) }}
     <button class="wa-brand">Map</button>
@@ -111,7 +125,7 @@
 <form method="post" action="/names/map" class="inline">
   <input type="hidden" name="key" value="{{ r.key }}">
   <span><wa-badge variant="neutral" appearance="outlined">{{ kind }}</wa-badge> <strong>{{ r.label }}</strong>
-    <span class="hint">used {{ r.line_count + r.recipe_count }}×</span></span>
+    <span class="hint">{{ where(r.key, 'used %d×' % (r.line_count + r.recipe_count)) }}</span></span>
   <input name="target_name" list="item-names" placeholder="item to map into">
   {{ map_fields('', '') }}
   <button class="wa-brand">Map</button>
@@ -129,7 +143,7 @@
 {% for r in found %}
 <form method="post" action="/names/map" class="inline">
   <input type="hidden" name="key" value="{{ r.key }}">
-  <span><strong>{{ r.label }}</strong> <span class="hint">{{ r.line_count }} lines · {{ r.recipe_count }} recipe ingredients{% if r.ignored %} · ignored{% endif %}
+  <span><strong>{{ r.label }}</strong> <span class="hint">{{ where(r.key, '%d lines · %d recipe ingredients' % (r.line_count, r.recipe_count)) }}{% if r.ignored %} · ignored{% endif %}
     {% if r.item_id %} · in <a href="/items/{{ r.item_id }}">{{ r.item_name }}</a>{% endif %}</span></span>
   <input name="target_name" list="item-names" placeholder="item to map into" required>
   {{ map_fields('', '') }}

@@ -384,3 +384,25 @@ def test_renaming_an_item_to_another_items_name_is_refused(env):
     assert response.status_code == 200
     row = conn.execute("SELECT name, canonical FROM item WHERE id = ?", (onion,)).fetchone()
     assert tuple(row) == ("Yellow Onion", 1)
+
+
+def test_names_show_where_each_name_is_used(env):
+    client, conn, fake = env
+    fake.add("a", "Flour", "King Soopers")
+    fake.add("b", "all-purpose flour", checked=True)
+    fake.add("c", "all-purpose flour", checked=True)
+    for i, recipe in enumerate(["Scones", "Banana Bread", "Pancakes", "Choux Pastry", "Pie"]):
+        fake.add_recipe(f"r{i}", recipe, ("i", "1 cup", "all-purpose flour", ""))
+    fake.add_recipe("s", "Bread", ("i", "500g", "bread flour", "sifted"))
+    client.post("/sync")
+
+    found = section(client.get("/names", params={"q": "flour"}).text, "All names")
+    text = " ".join(re.sub(r"<[^>]+>", " ", found).split())
+    assert (
+        "in Banana Bread, Choux Pastry, Pancakes +2 more Pie, Scones · 2 crossed-off lines" in text
+    )
+    assert "in Bread" in text
+    assert "1 open line" in text
+
+    suggestions = section(client.get("/names").text, "Contains another name")
+    assert "in Bread" in suggestions  # "bread flour" contains "Flour"

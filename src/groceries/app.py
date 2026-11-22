@@ -287,6 +287,34 @@ def build_review(conn, snap: anylist.Snapshot | None) -> list[ItemReview]:
     )
 
 
+@dataclass
+class Sources:
+    """Where a name is used in AnyList, as of the last sync."""
+
+    recipes: list[str] = field(default_factory=list)  # recipe names, sorted
+    open: int = 0  # open list lines
+    crossed_off: int = 0  # crossed-off list lines
+
+
+def name_sources(snap: anylist.Snapshot | None) -> dict[str, Sources]:
+    """Normalized name -> where it's used, from the snapshot the last sync took."""
+    if snap is None:
+        return {}
+    recipes: dict[str, set[str]] = defaultdict(set)
+    found: dict[str, Sources] = defaultdict(Sources)
+    for ing in snap.ingredients:
+        recipes[normalize(ing.text.name)].add(ing.recipe_name)
+    for line in snap.lines:
+        sources = found[normalize(line.name)]
+        if line.checked:
+            sources.crossed_off += 1
+        else:
+            sources.open += 1
+    for key, names in recipes.items():
+        found[key].recipes = sorted(names, key=str.casefold)
+    return dict(found)
+
+
 def name_nodes(conn) -> list[suggest.Name]:
     """Every name suggestions can pair: names seen in AnyList that aren't ignored, and
     every item's own name."""
@@ -570,6 +598,7 @@ def _routes(app: FastAPI) -> None:
             request,
             "names.html",
             review=build_review(conn, svc.snapshot),
+            sources=name_sources(svc.snapshot),
             likely=by_target(False),
             contains=by_target(True),
             odd=odd,

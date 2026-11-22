@@ -98,6 +98,10 @@ wa-details .group-label, wa-details .row { padding-inline: 0; }
 form.inline { display: flex; flex-wrap: wrap; gap: var(--wa-space-s); align-items: center; margin: var(--wa-space-s) 0; }
 form.inline input:not([type=hidden]), form.inline select { width: auto; flex: 1 1 12em; }
 table input[type=number] { width: 5em; }
+/* An inline "+N more" toggle, without Web Awesome's card styling for <details>. */
+details.more, details.more summary { display: inline; border: 0; padding: 0; margin: 0; background: none; box-shadow: none; }
+details.more summary { cursor: pointer; text-decoration: underline dotted; list-style: none; }
+details.more summary::marker, details.more summary::-webkit-details-marker, details.more summary::after { display: none; content: none; }
 .results img { width: 48px; height: 48px; object-fit: contain; }
 
 @media (max-width: 900px) {
