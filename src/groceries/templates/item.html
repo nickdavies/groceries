@@ -9,7 +9,7 @@
       <option value="{{ p.id }}">{{ p.label }}{% if p.used_by %} (used by {{ p.used_by }}){% endif %}</option>
       {% endfor %}
     </select>
-    <button class="small secondary">Use existing product</button>
+    <button class="wa-outlined">Use existing product</button>
   </form>
   {% endif %}
 {% endmacro %}
@@ -17,14 +17,15 @@
 {% block content %}
 <h1>{{ item.name }}</h1>
 
-<form method="post" action="/items/{{ item.id }}">
+<form method="post" action="/items/{{ item.id }}" class="panel">
   <label>Name <input name="name" value="{{ item.name }}" required></label>
-  <label class="check"><input type="checkbox" name="hand_pick" value="true" {{ 'checked' if item.hand_pick }}>
+  <label><input type="checkbox" name="hand_pick" value="true" {{ 'checked' if item.hand_pick }}>
     Hand-pick in person (never ordered online)</label>
-  <label>Note <input name="note" value="{{ item.note }}" class="wide" placeholder="e.g. the coffee shop on Tennyson"></label>
-  <button class="small">Save</button>
+  <label>Note <input name="note" value="{{ item.note }}" placeholder="e.g. the coffee shop on Tennyson"></label>
+  <button class="wa-brand">Save</button>
 </form>
 
+<div class="panel">
 <h2>Stores</h2>
 <p class="hint">Saved here and in AnyList on this item's open lines. A change made in AnyList comes back here too, and whichever change is newer wins. One store only means "only at".</p>
 <form method="post" action="/items/{{ item.id }}/stores">
@@ -33,7 +34,7 @@
     <tbody>
     {% for s in stores %}
       <tr>
-        <td>{{ s.name }}{% if s.kind == 'offline' %} <span class="tag">in person</span>{% endif %}</td>
+        <td>{{ s.name }}{% if s.kind == 'offline' %} <wa-badge variant="neutral" appearance="outlined">in person</wa-badge>{% endif %}</td>
         <td><input type="radio" name="preferred" value="{{ s.name }}" {{ 'checked' if s.preferred }}></td>
         <td><input type="checkbox" name="stores" value="{{ s.name }}" {{ 'checked' if s.allowed and not s.preferred }}></td>
       </tr>
@@ -45,9 +46,11 @@
       </tr>
     </tbody>
   </table>
-  <button class="small">Save stores</button>
+  <button class="wa-brand">Save stores</button>
 </form>
+</div>
 
+<div class="panel">
 <h2>Products</h2>
 <p class="hint">More than one enabled product at a store shows on the list as "pick one".</p>
 {% for s in stores if s.allowed and s.kind != 'offline' %}
@@ -63,12 +66,12 @@
         <td><a href="{{ p.url }}" target="_blank" rel="noopener">{{ p.label }}</a>
           {% if p.upc %}<span class="hint">UPC {{ p.upc }}</span>{% endif %}
           {% if p.also_used_by %}<div class="hint">also used by {{ p.also_used_by }}</div>{% endif %}</td>
-        <td><input type="number" name="priority" value="{{ p.priority }}" form="p{{ p.id }}" class="narrow"></td>
+        <td><input type="number" name="priority" value="{{ p.priority }}" form="p{{ p.id }}"></td>
         <td><input type="checkbox" name="enabled" value="true" form="p{{ p.id }}" {{ 'checked' if p.enabled }}></td>
-        <td><button class="small" form="p{{ p.id }}">Save</button></td>
+        <td><button class="wa-outlined" form="p{{ p.id }}">Save</button></td>
         <td>
           <form method="post" action="/items/{{ item.id }}/products/{{ p.id }}/unlink">
-            <button class="small secondary">Remove</button>
+            <button class="wa-outlined wa-danger">Remove</button>
           </form>
         </td>
       </tr>
@@ -85,9 +88,9 @@
     {% elif kroger_enabled %}
     <form method="get" action="/items/{{ item.id }}" class="inline">
       <input name="q" value="{{ q }}">
-      <button class="small">Search {{ s.name }}</button>
+      <button class="wa-brand">Search {{ s.name }}</button>
     </form>
-    {% if search_error %}<p class="error">Search failed: {{ search_error }}</p>{% endif %}
+    {% if search_error %}<wa-callout variant="danger" size="s">Search failed: {{ search_error }}</wa-callout>{% endif %}
     {% if results %}
     <table class="results">
       <tbody>
@@ -102,7 +105,7 @@
               <input type="hidden" name="label" value="{{ r.label }}">
               <input type="hidden" name="url" value="{{ r.url }}">
               <input type="hidden" name="upc" value="{{ r.upc }}">
-              <button class="small">Add</button>
+              <button class="wa-brand">Add</button>
             </form>
           </td>
         </tr>
@@ -120,22 +123,25 @@
       <input type="hidden" name="store_id" value="{{ s.id }}">
       <input name="label" placeholder="Product name" required>
       <input name="url" type="url" placeholder="Link to the product page" required>
-      <button class="small">Add</button>
+      <button class="wa-brand">Add</button>
     </form>
   {% endif %}
 </section>
 {% else %}
 <p class="hint">Pick the stores this comes from first. Products are added per store.</p>
 {% endfor %}
+</div>
 
+<div class="panel">
 <h2>AnyList names</h2>
-<p>{% for a in aliases %}<span class="tag">{{ a.external_id }}</span> {% endfor %}</p>
+<p>{% for a in aliases %}<wa-tag size="s">{{ a.external_id }}</wa-tag> {% endfor %}</p>
 {% if others %}
 <form method="post" action="/items/{{ item.id }}/merge" class="inline"
       onsubmit="return confirm('Merge the selected item into this one? It is removed afterwards.')">
   <select name="source">{% for o in others %}<option value="{{ o.id }}">{{ o.name }}</option>{% endfor %}</select>
-  <button class="small secondary">Merge into this item</button>
+  <button class="wa-outlined">Merge into this item</button>
 </form>
 <p class="hint">For typos and variants ("Avocados", "Avocado"). The other item's AnyList names, stores and products move here, and this item's name and preferred store are kept.</p>
 {% endif %}
+</div>
 {% endblock %}

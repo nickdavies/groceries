@@ -3,20 +3,21 @@
 {% block content %}
 <h1>Settings</h1>
 
+<div class="panel">
 <h2>King Soopers store</h2>
 <p class="hint">Product search shows prices and stock for this store.</p>
 {% if location %}
 <p><strong>{{ location.name }}</strong><br>{{ location.address }}</p>
 {% else %}
-<p class="error">No store picked yet. King Soopers product search is off until you pick one.</p>
+<wa-callout variant="warning" size="s">No store picked yet. King Soopers product search is off until you pick one.</wa-callout>
 {% endif %}
 
 {% if kroger_enabled %}
 <form method="get" action="/settings" class="inline">
   <input name="zip" value="{{ zip }}" placeholder="ZIP code" inputmode="numeric" required>
-  <button class="small">Find stores</button>
+  <button class="wa-brand">Find stores</button>
 </form>
-{% if error %}<p class="error">Lookup failed: {{ error }}</p>{% endif %}
+{% if error %}<wa-callout variant="danger" size="s">Lookup failed: {{ error }}</wa-callout>{% endif %}
 {% if locations %}
 <table>
   <tbody>
@@ -25,13 +26,13 @@
       <td><strong>{{ l.name }}</strong><div class="hint">{{ l.address }}</div></td>
       <td>
         {% if location and location.id == l.id %}
-          <span class="tag">current</span>
+          <wa-badge variant="success">current</wa-badge>
         {% else %}
         <form method="post" action="/settings/kroger-location">
           <input type="hidden" name="id" value="{{ l.id }}">
           <input type="hidden" name="name" value="{{ l.name }}">
           <input type="hidden" name="address" value="{{ l.address }}">
-          <button class="small">Use this store</button>
+          <button class="wa-outlined">Use this store</button>
         </form>
         {% endif %}
       </td>
@@ -45,7 +46,9 @@
 {% else %}
 <p class="hint">Kroger API credentials aren't configured.</p>
 {% endif %}
+</div>
 
+<div class="panel">
 <h2>Stores</h2>
 <p class="hint">"Order online" stores get a section on the list with product links. "In person" stores' items are listed under In person.
   The search link is used for items with no product yet: put <code>{}</code> where the search words go.</p>
@@ -65,14 +68,14 @@
           </select>
           {% endif %}
         </td>
-        <td><input name="search_url_{{ s.id }}" value="{{ s.search_url or '' }}" class="wide"
+        <td><input name="search_url_{{ s.id }}" value="{{ s.search_url or '' }}"
                    placeholder="https://example.com/search?q={}"></td>
         <td>{{ s.items }}</td>
       </tr>
     {% endfor %}
     </tbody>
   </table>
-  <button class="small">Save stores</button>
+  <button class="wa-brand">Save stores</button>
 </form>
 
 <h3>Add a store</h3>
@@ -83,6 +86,7 @@
     <option value="offline">In person</option>
     <option value="manual">Order online</option>
   </select>
-  <button class="small">Add store</button>
+  <button class="wa-brand">Add store</button>
 </form>
+</div>
 {% endblock %}

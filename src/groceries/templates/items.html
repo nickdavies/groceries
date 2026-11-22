@@ -3,12 +3,13 @@
 {% block content %}
 <h1>Items</h1>
 <p class="hint">Every name seen on the AnyList list becomes an item. Merge items that are the same thing from the item's page.</p>
-<table>
+<div class="panel">
+<table class="wa-hover-rows">
   <thead><tr><th>Item</th><th>AnyList names</th><th>Stores</th><th>Products</th></tr></thead>
   <tbody>
   {% for i in items %}
     <tr>
-      <td><a href="/items/{{ i.id }}">{{ i.name }}</a>{% if i.hand_pick %} <span class="tag">hand-pick</span>{% endif %}</td>
+      <td><a href="/items/{{ i.id }}">{{ i.name }}</a>{% if i.hand_pick %} <wa-badge variant="neutral" appearance="outlined">hand-pick</wa-badge>{% endif %}</td>
       <td>{{ i.aliases or '' }}</td>
       <td>
         {% if not i.preferred %}{{ 'Anywhere' if i.anywhere else '—' }}
@@ -22,4 +23,5 @@
   {% endfor %}
   </tbody>
 </table>
+</div>
 {% endblock %}

@@ -1,7 +1,8 @@
 """Web UI: the shopping list grouped by store, plus item and product editing.
 
-Server-rendered forms with POST-redirect-GET, no client-side JS. A background loop syncs
-AnyList periodically. Store changes made here are written to AnyList straight away.
+Server-rendered forms with POST-redirect-GET, styled with Web Awesome components from
+its CDN. The little client-side JS is in static/app.js. A background loop syncs AnyList
+periodically. Store changes made here are written to AnyList straight away.
 """
 
 import asyncio
@@ -11,6 +12,7 @@ import os
 import sqlite3
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 from urllib.parse import quote_plus
@@ -40,11 +42,13 @@ class Services:
         self.kroger = kroger
         self.lock = asyncio.Lock()
         self.last_sync: sync.SyncReport | None = None
+        self.last_sync_at: datetime | None = None
         self.last_error: str | None = None
 
     async def _sync_locked(self) -> bool:
         try:
             self.last_sync = await sync.sync(self.conn, self.backend)
+            self.last_sync_at = datetime.now(UTC)
             self.last_error = None
             return True
         except Exception as e:
@@ -248,7 +252,7 @@ def _routes(app: FastAPI) -> None:
     @app.get("/")
     async def shopping_list(request: Request):
         conn = _svc(request).conn
-        stores = conn.execute("SELECT name FROM store ORDER BY kind = 'offline', sort").fetchall()
+        stores = conn.execute("SELECT name, kind FROM store ORDER BY sort").fetchall()
         return _render(request, "list.html", view=build_list(conn), all_stores=stores)
 
     @app.post("/sync")

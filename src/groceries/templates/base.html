@@ -1,18 +1,46 @@
 <!doctype html>
-<html lang="en">
+{# Web Awesome from jsDelivr, pinned. wa-cloak hides the page (2s at most) until its components load. #}
+{% set wa = "https://cdn.jsdelivr.net/npm/@awesome.me/webawesome@3.15.0/dist-cdn" %}
+<html lang="en" class="wa-cloak wa-brand-green">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Groceries{% endblock %}</title>
+  <link rel="stylesheet" href="{{ wa }}/styles/webawesome.css">
+  <script type="module" src="{{ wa }}/webawesome.loader.js"></script>
+  <script src="{{ url_for('static', path='app.js') }}"></script>
   <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}">
 </head>
 <body>
-  <nav>
-    <a href="/">List</a>
-    <a href="/items">Items</a>
-    <a href="/settings">Settings</a>
-  </nav>
-  {% if svc.last_error %}<p class="error">Last sync failed: {{ svc.last_error }}</p>{% endif %}
-  <main>{% block content %}{% endblock %}</main>
+  {% set path = request.url.path %}
+  <header class="app">
+    <a class="brand" href="/"><wa-icon name="basket-shopping"></wa-icon><span>Groceries</span></a>
+    <nav>
+      {% for href, label in [("/", "List"), ("/items", "Items"), ("/settings", "Settings")] %}
+      <a href="{{ href }}"{% if path == href or (href != "/" and path.startswith(href)) %} aria-current="page"{% endif %}>{{ label }}</a>
+      {% endfor %}
+    </nav>
+    <div class="sync">
+      {% if svc.last_sync_at %}
+      <span class="when">Synced <wa-relative-time date="{{ svc.last_sync_at.isoformat() }}" sync></wa-relative-time>
+        · {{ svc.last_sync.lines }} open lines</span>
+      {% endif %}
+      <form method="post" action="/sync">
+        <wa-button type="submit" size="s" appearance="outlined"><wa-icon slot="start" name="rotate"></wa-icon>Sync</wa-button>
+      </form>
+    </div>
+  </header>
+  <div class="page {% block page_class %}{% endblock %}">
+    {% block rail %}{% endblock %}
+    <main>
+      {% if svc.last_error %}
+      <wa-callout variant="danger" appearance="filled-outlined" size="s">
+        <wa-icon slot="icon" name="triangle-exclamation"></wa-icon>
+        Last sync failed: {{ svc.last_error }}
+      </wa-callout>
+      {% endif %}
+      {% block content %}{% endblock %}
+    </main>
+  </div>
 </body>
 </html>

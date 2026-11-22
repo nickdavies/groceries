@@ -1,131 +1,162 @@
 {% extends "base.html" %}
+{% block page_class %}with-rail{% endblock %}
+
+{% macro count(n, variant="neutral") %}<wa-badge variant="{{ variant }}" appearance="filled" pill>{{ n }}</wa-badge>{% endmacro %}
+
+{% macro line_name(l) %}
+  <a class="name" href="/items/{{ l.item_id }}">{{ l.name }}</a>
+  {%- if l.quantity %} <wa-badge variant="neutral" appearance="outlined">× {{ l.quantity }}</wa-badge>{% endif %}
+  {%- if l.note %}<div class="note">{{ l.note }}</div>{% endif %}
+{% endmacro %}
 
 {% macro product_links(store, line, products) %}
   {% if products|length > 1 %}
-    <span class="hint">pick one:</span>
-    {% for p in products %}{% if not loop.first %} <span class="hint">or</span> {% endif %}<a href="{{ p.url }}" target="_blank" rel="noopener">{{ p.label }}</a>{% endfor %}
+    <span class="hint">pick one</span>
+    {% for p in products %}{% if not loop.first %}<span class="hint">or</span>{% endif %}
+    <wa-button size="s" appearance="outlined" href="{{ p.url }}" target="_blank" rel="noopener">{{ p.label }}<wa-icon slot="end" name="arrow-up-right-from-square"></wa-icon></wa-button>
+    {% endfor %}
   {% elif products %}
-    <a href="{{ products[0].url }}" target="_blank" rel="noopener">{{ products[0].label }}</a>
+    <wa-button size="s" appearance="outlined" href="{{ products[0].url }}" target="_blank" rel="noopener">{{ products[0].label }}<wa-icon slot="end" name="arrow-up-right-from-square"></wa-icon></wa-button>
   {% else %}
     {% set link = search_link(store, line.name) %}
-    {% if link %}<a href="{{ link }}" target="_blank" rel="noopener">Search {{ store.name }}</a>{% endif %}
-    <a href="/items/{{ line.item_id }}">add product</a>
+    {% if link %}<wa-button size="s" appearance="plain" href="{{ link }}" target="_blank" rel="noopener"><wa-icon slot="start" name="magnifying-glass"></wa-icon>Search {{ store.name }}</wa-button>{% endif %}
+    <wa-button size="s" appearance="plain" href="/items/{{ line.item_id }}"><wa-icon slot="start" name="plus"></wa-icon>Add product</wa-button>
   {% endif %}
 {% endmacro %}
 
-{% macro note(line) %}{% if line.note %}<div class="hint">{{ line.note }}</div>{% endif %}{% endmacro %}
+{% block rail %}
+<nav class="rail" aria-label="Sections">
+  {% if view.unassigned %}
+  <div class="label">To sort</div>
+  <a href="#unassigned">No store yet {{ count(view.unassigned|length, "warning") }}</a>
+  {% endif %}
+  <div class="label">Order online</div>
+  {% for g in view.stores %}
+  <a href="#store-{{ g.store.id }}">{{ g.store.name }} {{ count(g.lines|length) }}</a>
+  {% endfor %}
+  {% if view.in_person or view.on_the_way %}<div class="label">Elsewhere</div>{% endif %}
+  {% if view.in_person %}<a href="#in-person">In person {{ count(view.in_person|length) }}</a>{% endif %}
+  {% if view.on_the_way %}<a href="#on-the-way">On the way {{ count(view.on_the_way.values()|map('length')|sum) }}</a>{% endif %}
+</nav>
+{% endblock %}
 
 {% block content %}
-<div class="bar">
-  <h1>Shopping list</h1>
-  <form method="post" action="/sync"><button class="small secondary">Sync now</button></form>
-</div>
-
 {% if view.unassigned %}
-<section class="burndown">
-  <h2>No store yet ({{ view.unassigned|length }})</h2>
-  <p class="hint">Pick where each comes from. It's saved on the item and in AnyList. "Anywhere" leaves it unset in AnyList.</p>
-  <table><tbody>
+{# Opened from a line's "More" menu (static/app.js), which points the form at that line. #}
+<wa-dialog id="new-store" label="New store" light-dismiss>
+  <form method="post" id="new-store-form">
+    <wa-input name="new_store" label="Store name" required></wa-input>
+    <p class="hint">Added to AnyList too, as an in-person store. Change its type in Settings.</p>
+  </form>
+  <wa-button slot="footer" type="submit" form="new-store-form" variant="brand">Add and use</wa-button>
+</wa-dialog>
+
+<wa-card id="unassigned" class="burndown">
+  <h2 slot="header"><wa-icon name="inbox"></wa-icon>No store yet {{ count(view.unassigned|length, "warning") }}</h2>
+  <span slot="header-actions" class="hint">Saved on the item and in AnyList</span>
   {% for lv in view.unassigned %}
-    {% set l = lv.row %}
-    <tr>
-      <td><a href="/items/{{ l.item_id }}">{{ l.name }}</a>{% if l.quantity %} <span class="qty">× {{ l.quantity }}</span>{% endif %}{{ note(l) }}</td>
-      <td>
-        <form method="post" action="/lines/{{ l.anylist_item_id }}/store" class="inline">
-          <select name="store">
-            <option value="" selected>Choose…</option>
-            <option value=":anywhere">Anywhere / no preference</option>
-            {% for s in all_stores %}<option>{{ s.name }}</option>{% endfor %}
-          </select>
-          <input name="new_store" placeholder="or a new store" size="14">
-          <button class="small">Set</button>
-        </form>
-      </td>
-    </tr>
+  {% set l = lv.row %}
+  <div class="row">
+    <div class="what">{{ line_name(l) }}</div>
+    <form method="post" action="/lines/{{ l.anylist_item_id }}/store" class="actions store-picker">
+      <div class="stores" role="group" aria-label="Store">
+        {% for s in all_stores if s.kind != "offline" %}
+        <wa-button type="submit" size="s" appearance="outlined" pill name="store" value="{{ s.name }}">{{ s.name }}</wa-button>
+        {% endfor %}
+        <wa-button type="submit" size="s" appearance="outlined" pill name="store" value=":anywhere">Anywhere</wa-button>
+        <wa-dropdown>
+          <wa-button slot="trigger" size="s" appearance="plain" with-caret>More</wa-button>
+          {% for s in all_stores if s.kind == "offline" %}
+          <wa-dropdown-item value="{{ s.name }}">{{ s.name }}</wa-dropdown-item>
+          {% if loop.last %}<wa-divider></wa-divider>{% endif %}
+          {% endfor %}
+          <wa-dropdown-item value=":new"><wa-icon slot="icon" name="plus"></wa-icon>New store…</wa-dropdown-item>
+        </wa-dropdown>
+      </div>
+    </form>
+  </div>
   {% endfor %}
-  </tbody></table>
-</section>
+</wa-card>
 {% endif %}
 
 {% for g in view.stores %}
-<section>
-  <div class="bar">
-    <h2>{{ g.store.name }} ({{ g.lines|length }})</h2>
-    {% if g.lines %}
-    <form method="post" action="/stores/{{ g.store.id }}/ordered">
-      {% for lv in g.lines %}<input type="hidden" name="ids" value="{{ lv.row.anylist_item_id }}">{% endfor %}
-      <button class="small secondary">Mark all ordered</button>
-    </form>
-    {% endif %}
-  </div>
+{% set sid = g.store.id %}
+<wa-card id="store-{{ sid }}">
+  <h2 slot="header">{{ g.store.name }} {{ count(g.lines|length) }}</h2>
   {% if g.lines %}
-  <form method="post" action="/stores/{{ g.store.id }}/ordered" id="ordered-{{ g.store.id }}"></form>
-  <table><tbody>
+  <div slot="header-actions" class="card-actions">
+    <form method="post" action="/stores/{{ sid }}/ordered" id="ordered-{{ sid }}"></form>
+    <wa-button type="submit" form="ordered-{{ sid }}" size="s" variant="brand"><wa-icon slot="start" name="check"></wa-icon>Mark ticked ordered</wa-button>
+    <form method="post" action="/stores/{{ sid }}/ordered">
+      {% for lv in g.lines %}<input type="hidden" name="ids" value="{{ lv.row.anylist_item_id }}">{% endfor %}
+      <wa-button type="submit" size="s" appearance="outlined">Mark all ordered</wa-button>
+    </form>
+  </div>
   {% for lv in g.lines %}
-    {% set l = lv.row %}
-    <tr>
-      <td><input type="checkbox" name="ids" value="{{ l.anylist_item_id }}" form="ordered-{{ g.store.id }}"></td>
-      <td>
-        <a href="/items/{{ l.item_id }}" class="name">{{ l.name }}</a>{% if l.quantity %} <span class="qty">× {{ l.quantity }}</span>{% endif %}
-        {{ note(l) }}
-        <div class="links">{{ product_links(g.store, l, lv.products) }}</div>
-        {% for s, products in lv.also %}
-        <details class="also">
-          <summary>also at {{ s.name }}</summary>
-          <div class="links">{{ product_links(s, l, products) }}</div>
+  {% set l = lv.row %}
+  <div class="row">
+    <wa-checkbox name="ids" value="{{ l.anylist_item_id }}" form="ordered-{{ sid }}"></wa-checkbox>
+    <div class="what">{{ line_name(l) }}</div>
+    <div class="actions">
+      {{ product_links(g.store, l, lv.products) }}
+      {% if lv.also %}
+      {% set also_id = "also-%s-%s"|format(sid, loop.index) %}
+      <wa-button id="{{ also_id }}" size="s" appearance="plain" with-caret>
+        also at {{ lv.also[0][0].name if lv.also|length == 1 else "%d stores"|format(lv.also|length) }}</wa-button>
+      <wa-popover for="{{ also_id }}" placement="bottom-end">
+        <div class="popover-body">
+          {% for s, products in lv.also %}
+          {% if not loop.first %}<wa-divider></wa-divider>{% endif %}
+          <strong>{{ s.name }}</strong>
+          <div class="actions">{{ product_links(s, l, products) }}</div>
           <form method="post" action="/stores/{{ s.id }}/ordered">
             <input type="hidden" name="ids" value="{{ l.anylist_item_id }}">
-            <button class="small secondary">Ordered from {{ s.name }}</button>
+            <wa-button type="submit" size="s" variant="brand">Ordered from {{ s.name }}</wa-button>
           </form>
-        </details>
-        {% endfor %}
-      </td>
-    </tr>
+          {% endfor %}
+        </div>
+      </wa-popover>
+      {% endif %}
+    </div>
+  </div>
   {% endfor %}
-  </tbody></table>
-  <button class="small" form="ordered-{{ g.store.id }}">Mark ticked as ordered</button>
   {% else %}
-  <p class="hint">Nothing to order.</p>
+  <div class="row hint">Nothing to order.</div>
   {% endif %}
-</section>
+</wa-card>
 {% endfor %}
 
 {% if view.in_person %}
-<section>
-  <h2>In person ({{ view.in_person|length }})</h2>
-  <table><tbody>
-  {% for l, store in view.in_person %}
-    <tr>
-      <td><a href="/items/{{ l.item_id }}">{{ l.name }}</a>{% if l.quantity %} <span class="qty">× {{ l.quantity }}</span>{% endif %}{{ note(l) }}</td>
-      <td class="hint">{{ store }}</td>
-    </tr>
+<wa-card id="in-person">
+  <h2 slot="header"><wa-icon name="person-walking"></wa-icon>In person {{ count(view.in_person|length) }}</h2>
+  {% for store, pairs in view.in_person|groupby(1) %}
+  <div class="group-label">{{ store }}</div>
+  {% for l, _ in pairs %}
+  <div class="row">
+    <div class="what">{{ line_name(l) }}</div>
+    {% if l.hand_pick %}<wa-badge variant="neutral" appearance="outlined">hand-pick</wa-badge>{% endif %}
+  </div>
   {% endfor %}
-  </tbody></table>
-</section>
+  {% endfor %}
+</wa-card>
 {% endif %}
 
-<details class="section"{% if not view.on_the_way %} hidden{% endif %}>
-  <summary><h2>On the way ({{ view.on_the_way.values()|map('length')|sum }})</h2></summary>
+{% if view.on_the_way %}
+<wa-details id="on-the-way">
+  <h2 slot="summary">On the way {{ count(view.on_the_way.values()|map('length')|sum) }}</h2>
   <p class="hint">Check items off in AnyList when they arrive. They drop off here on the next sync.</p>
   {% for store, lines in view.on_the_way.items() %}
-  <h3>{{ store }}</h3>
-  <table><tbody>
+  <div class="group-label">{{ store }}</div>
   {% for l in lines %}
-    <tr>
-      <td>{{ l.name }}{% if l.quantity %} × {{ l.quantity }}{% endif %}</td>
-      <td>
-        <form method="post" action="/lines/not-received">
-          <input type="hidden" name="ids" value="{{ l.anylist_item_id }}">
-          <button class="small secondary">Didn't arrive</button>
-        </form>
-      </td>
-    </tr>
+  <div class="row">
+    <div class="what">{{ l.name }}{% if l.quantity %} <wa-badge variant="neutral" appearance="outlined">× {{ l.quantity }}</wa-badge>{% endif %}</div>
+    <form method="post" action="/lines/not-received">
+      <input type="hidden" name="ids" value="{{ l.anylist_item_id }}">
+      <wa-button type="submit" size="s" appearance="plain">Didn't arrive</wa-button>
+    </form>
+  </div>
   {% endfor %}
-  </tbody></table>
   {% endfor %}
-</details>
-
-{% if svc.last_sync %}
-<p class="hint">Last sync: {{ svc.last_sync.lines }} open lines.</p>
+</wa-details>
 {% endif %}
 {% endblock %}

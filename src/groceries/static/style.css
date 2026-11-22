@@ -1,72 +1,117 @@
-:root {
-  --bg: #fafaf7;
-  --fg: #1f2328;
-  --muted: #6a737d;
-  --accent: #2f6f4f;
-  --line: #e2e2dc;
-  --error-bg: #fdecea;
-  --error-fg: #8a1c12;
-  color-scheme: light dark;
+/* Layout and app-specific bits on top of Web Awesome's native styles and theme tokens. */
+
+body { background: var(--wa-color-surface-lowered); }
+.hint { color: var(--wa-color-text-quiet); font-size: var(--wa-font-size-s); }
+
+/* Header: brand, nav, sync status. Sticky so Sync and nav stay in reach. */
+header.app {
+  position: sticky; top: 0; z-index: 10;
+  display: flex; align-items: center; gap: var(--wa-space-l);
+  padding: var(--wa-space-s) var(--wa-space-l);
+  background: var(--wa-color-surface-default);
+  border-bottom: 1px solid var(--wa-color-surface-border);
 }
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #16181b;
-    --fg: #e6e6e3;
-    --muted: #9aa0a6;
-    --accent: #6fbf8f;
-    --line: #2c2f33;
-    --error-bg: #3b1a17;
-    --error-fg: #f4b4ad;
-  }
+header.app .brand {
+  display: flex; align-items: center; gap: var(--wa-space-xs);
+  font-size: var(--wa-font-size-l); font-weight: var(--wa-font-weight-bold);
+  color: var(--wa-color-text-normal); text-decoration: none;
 }
-* { box-sizing: border-box; }
-body {
-  margin: 0;
-  background: var(--bg);
-  color: var(--fg);
-  font: 16px/1.45 system-ui, sans-serif;
+header.app nav { display: flex; gap: var(--wa-space-m); }
+header.app nav a { color: var(--wa-color-text-quiet); font-weight: var(--wa-font-weight-semibold); text-decoration: none; }
+header.app nav a[aria-current] { color: var(--wa-color-brand-on-quiet); }
+header.app .sync {
+  margin-left: auto; display: flex; align-items: center; gap: var(--wa-space-s);
+  color: var(--wa-color-text-quiet); font-size: var(--wa-font-size-s);
 }
-nav {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 16px;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--line);
+header.app form { margin: 0; }
+
+.page { max-width: 1000px; margin: 0 auto; padding: var(--wa-space-l); }
+.page.with-rail {
+  display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: var(--wa-space-xl);
+  max-width: 1200px;
 }
-main { padding: 0 16px 48px; max-width: 900px; }
-a { color: var(--accent); }
-table { border-collapse: collapse; width: 100%; margin: 8px 0 16px; }
-td, th { padding: 8px 6px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
-button {
-  font: inherit;
-  padding: 8px 14px;
-  border: 0;
-  border-radius: 6px;
-  background: var(--accent);
-  color: var(--bg);
-  cursor: pointer;
+main { display: flex; flex-direction: column; gap: var(--wa-space-l); min-width: 0; }
+main h1 { margin: 0; font-size: var(--wa-font-size-2xl); }
+
+/* List page: jump links with counts. A sticky column on desktop, a chip row on phones. */
+.rail { position: sticky; top: 72px; align-self: start; display: flex; flex-direction: column; gap: 2px; }
+.rail a {
+  display: flex; justify-content: space-between; align-items: center; gap: var(--wa-space-xs);
+  padding: var(--wa-space-xs) var(--wa-space-s); border-radius: var(--wa-border-radius-m);
+  color: var(--wa-color-text-normal); text-decoration: none;
 }
-button.small { padding: 4px 10px; font-size: 14px; }
-button.secondary { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
-input, select { font: inherit; padding: 6px 8px; max-width: 100%; }
-input[type="checkbox"] { width: 20px; height: 20px; }
-.narrow { width: 5em; }
-label { display: block; margin: 8px 0; }
-label.check { display: flex; gap: 8px; align-items: center; }
-form.inline { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; }
-.links { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 4px; font-size: 15px; }
-.hint { color: var(--muted); font-size: 14px; }
-.qty { color: var(--muted); }
-.tag { font-size: 12px; padding: 1px 6px; border: 1px solid var(--line); border-radius: 4px; color: var(--muted); }
-.error { background: var(--error-bg); color: var(--error-fg); padding: 8px 12px; border-radius: 6px; }
+.rail a:hover { background: var(--wa-color-neutral-fill-quiet); }
+.rail .label, .group-label {
+  color: var(--wa-color-text-quiet); font-size: var(--wa-font-size-xs);
+  text-transform: uppercase; letter-spacing: .05em;
+}
+.rail .label { margin: var(--wa-space-m) var(--wa-space-s) var(--wa-space-2xs); }
+
+/* List page sections */
+wa-card, wa-details { scroll-margin-top: 80px; }
+wa-card::part(body) { padding: 0; }
+wa-card h2, wa-details h2 {
+  margin: 0; font-size: var(--wa-font-size-l);
+  display: flex; align-items: center; gap: var(--wa-space-xs);
+}
+.burndown { --wa-color-surface-border: var(--wa-color-warning-border-quiet); }
+.burndown::part(header) { background: var(--wa-color-warning-fill-quiet); }
+.card-actions { display: flex; flex-wrap: wrap; gap: var(--wa-space-xs); justify-content: flex-end; }
+.card-actions form { margin: 0; }
+
+/* A line: what it is on the left, actions on the right. Stacks on phones. */
+.row {
+  display: flex; align-items: center; gap: var(--wa-space-m);
+  padding: var(--wa-space-s) var(--wa-space-l);
+  border-top: 1px solid var(--wa-color-surface-border);
+}
+.row:first-child, .group-label + .row { border-top: 0; }
+.row form { margin: 0; }
+.row .what { flex: 1; min-width: 0; }
+.row .name { font-weight: var(--wa-font-weight-semibold); color: var(--wa-color-text-normal); text-decoration: none; }
+.row .name:hover { text-decoration: underline; }
+.row .note { color: var(--wa-color-text-quiet); font-size: var(--wa-font-size-s); }
+.actions { display: flex; flex-wrap: wrap; gap: var(--wa-space-xs); align-items: center; justify-content: flex-end; }
+.stores { display: flex; flex-wrap: wrap; align-items: center; gap: var(--wa-space-2xs); }
+.group-label { padding: var(--wa-space-s) var(--wa-space-l) 0; }
+wa-details .group-label, wa-details .row { padding-inline: 0; }
+.popover-body { display: flex; flex-direction: column; align-items: flex-start; gap: var(--wa-space-s); min-width: 220px; }
+.popover-body .actions { justify-content: flex-start; }
+
+/* Items and Settings: sections as panels around Web Awesome's native form and table styles. */
+.panel {
+  background: var(--wa-color-surface-default);
+  border: 1px solid var(--wa-color-surface-border); border-radius: var(--wa-border-radius-l);
+  padding: var(--wa-space-l);
+}
+.panel, .panel section { display: flex; flex-direction: column; gap: var(--wa-space-m); }
+.panel > *, .panel section > * { margin-block: 0; }
+.panel section { margin-top: var(--wa-space-s); }
+.panel h2 { font-size: var(--wa-font-size-xl); }
+.panel h3 { font-size: var(--wa-font-size-l); }
+.panel td { vertical-align: middle; }
+.panel button { align-self: flex-start; }
+form.inline { display: flex; flex-wrap: wrap; gap: var(--wa-space-s); align-items: center; margin: var(--wa-space-s) 0; }
+form.inline input:not([type=hidden]), form.inline select { width: auto; flex: 1 1 12em; }
+table input[type=number] { width: 5em; }
 .results img { width: 48px; height: 48px; object-fit: contain; }
-.wide { width: 100%; }
-.bar { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; justify-content: space-between; }
-.bar h1, .bar h2 { margin: 16px 0 8px; }
-section { margin-bottom: 24px; }
-.burndown { border-left: 4px solid var(--accent); padding-left: 12px; }
-a.name { color: var(--fg); font-weight: 600; text-decoration: none; }
-details.also { margin-top: 4px; font-size: 14px; }
-details.also summary { color: var(--muted); cursor: pointer; }
-details.section summary { cursor: pointer; }
-details.section summary h2 { display: inline; }
+
+@media (max-width: 900px) {
+  .page, .page.with-rail { grid-template-columns: minmax(0, 1fr); padding: var(--wa-space-s); gap: var(--wa-space-s); }
+  header.app { gap: var(--wa-space-m); padding: var(--wa-space-xs) var(--wa-space-s); }
+  header.app .brand span, header.app .sync .when, .burndown [slot=header-actions] { display: none; }
+  .rail {
+    top: 52px; z-index: 5; flex-direction: row; overflow-x: auto;
+    padding: var(--wa-space-xs) 0; background: var(--wa-color-surface-lowered);
+  }
+  .rail .label { display: none; }
+  .rail a {
+    white-space: nowrap; background: var(--wa-color-surface-default);
+    border: 1px solid var(--wa-color-surface-border); border-radius: var(--wa-border-radius-pill);
+  }
+  wa-card::part(header) { padding: var(--wa-space-s) var(--wa-space-m); }
+  .row { flex-wrap: wrap; padding: var(--wa-space-s) var(--wa-space-m); }
+  .row .actions { width: 100%; justify-content: flex-start; }
+  .row wa-checkbox ~ .actions { padding-left: 36px; }
+  .panel { padding: var(--wa-space-m); }
+}

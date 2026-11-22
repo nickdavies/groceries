@@ -36,11 +36,20 @@ def item_of(conn, line_id):
     ).fetchone()[0]
 
 
+def sections(page: str) -> dict[str, str]:
+    """Each <h2>'s text, as "Name (count)", mapped to its HTML up to the next <h2>."""
+    found = {}
+    for match in re.finditer(r"<h2[^>]*>(.*?)</h2>.*?(?=<h2|\Z)", page, re.S):
+        text = " ".join(re.sub(r"<[^>]+>", " ", match.group(1)).split())
+        found[re.sub(r" (\d+)$", r" (\1)", text)] = match.group(0)
+    return found
+
+
 def section(page: str, heading: str) -> str:
-    """The HTML from an <h2> starting with `heading` up to the next <h2>."""
-    match = re.search(rf"<h2>{re.escape(heading)}.*?(?=<h2>|\Z)", page, re.S)
-    assert match, f"no section {heading!r}"
-    return match.group(0)
+    """The section whose heading starts with `heading`."""
+    html = next((h for text, h in sections(page).items() if text.startswith(heading)), None)
+    assert html, f"no section {heading!r} in {list(sections(page))}"
+    return html
 
 
 def test_list_groups_every_line_once(env):
@@ -51,11 +60,15 @@ def test_list_groups_every_line_once(env):
     fake.add("d", "Templeton Rye", "Total Beverage", quantity="2")
     client.post("/sync")
     page = client.get("/").text
-    assert "Shower rod" in section(page, "No store yet (1)")
+    burndown = section(page, "No store yet (1)")
+    assert "Shower rod" in burndown
+    assert 'name="store" value="Costco"' in burndown  # online stores are one click
+    assert '<wa-dropdown-item value="H-Mart">' in burndown  # in-person ones are under "More"
     assert "Prosciutto" in section(page, "Costco (1)")
     assert "× 2" in section(page, "Total Beverage (1)")
     assert "Kewpie mayo" in section(page, "In person (1)") and "H-Mart" in page
-    assert page.index("No store yet") < page.index("King Soopers (0)")
+    headings = list(sections(page))
+    assert headings.index("No store yet (1)") < headings.index("King Soopers (0)")
 
 
 def test_setting_a_store_from_the_burndown_writes_anylist(env):
@@ -80,7 +93,7 @@ def test_product_links_and_pick_one(env):
     for label, url in [("Bottled juice", "https://x/juice"), ("Whole lemons", "https://x/lemon")]:
         client.post(f"{item}/products", data={"store_id": ks, "label": label, "url": url})
     page = section(client.get("/").text, "King Soopers")
-    assert "pick one:" in page and "https://x/juice" in page and "https://x/lemon" in page
+    assert "pick one" in page and "https://x/juice" in page and "https://x/lemon" in page
 
 
 def test_product_is_shared_between_items(env):
@@ -113,13 +126,13 @@ def test_also_available_and_ordering_from_there(env):
     assert fake.stores_of("a") == {"Natural Grocers", "King Soopers"}
     page = client.get("/").text
     assert "also at King Soopers" in section(page, "Natural Grocers (1)")
-    assert "King Soopers (0)" in page
+    assert "King Soopers (0)" in sections(page)
 
     client.post(f"/stores/{sid(conn, 'King Soopers')}/ordered", data={"ids": ["a"]})
     page = client.get("/").text
-    assert "Natural Grocers (0)" in page and "On the way (1)" in page
+    assert {"Natural Grocers (0)", "On the way (1)"} <= sections(page).keys()
     client.post("/lines/not-received", data={"ids": ["a"]})
-    assert "Natural Grocers (1)" in client.get("/").text
+    assert "Natural Grocers (1)" in sections(client.get("/").text)
 
 
 def test_ui_store_change_applies_on_top_of_anylist_edits(env):
@@ -140,7 +153,7 @@ def test_hand_pick_goes_in_person(env):
     client.post(item, data={"name": "Ribeye", "hand_pick": "true"})
     page = client.get("/").text
     assert "ribeye" in section(page, "In person (1)")
-    assert "King Soopers (0)" in page and "Costco (0)" in page
+    assert {"King Soopers (0)", "Costco (0)"} <= sections(page).keys()
 
 
 def test_merge_from_the_item_page(env):
@@ -169,7 +182,7 @@ def test_anywhere_is_explicit_and_leaves_anylist_unset(env):
     client, conn, fake = env
     fake.add("a", "Shower rod")
     client.post("/sync")
-    client.post("/lines/a/store", data={"store": ""})  # "Choose…" does nothing
+    client.post("/lines/a/store", data={"store": ""})  # no choice does nothing
     assert "Shower rod" in section(client.get("/").text, "No store yet")
 
     client.post("/lines/a/store", data={"store": ":anywhere"})
@@ -230,7 +243,7 @@ def test_add_store_from_settings(env):
     client, conn, fake = env
     client.post("/stores", data={"name": "Target", "kind": "manual"})
     assert "Target" in fake.stores
-    assert "Target (0)" in client.get("/").text
+    assert "Target (0)" in sections(client.get("/").text)
 
 
 def test_every_page_renders(env):
