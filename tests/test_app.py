@@ -80,7 +80,7 @@ def test_setting_a_store_from_the_burndown_writes_anylist(env):
     assert "No store yet" not in client.get("/").text
 
 
-def test_product_links_and_pick_one(env):
+def test_first_product_link_with_alternatives(env):
     client, conn, fake = env
     fake.add("a", "lemon juice", "King Soopers")
     client.post("/sync")
@@ -89,11 +89,13 @@ def test_product_links_and_pick_one(env):
 
     page = section(client.get("/").text, "King Soopers")
     assert "kingsoopers.com/search?query=lemon+juice" in page  # no product yet
+    assert f'href="{item}#products"' in page  # "Add product" lands on the Products section
 
     for label, url in [("Bottled juice", "https://x/juice"), ("Whole lemons", "https://x/lemon")]:
         client.post(f"{item}/products", data={"store_id": ks, "label": label, "url": url})
     page = section(client.get("/").text, "King Soopers")
-    assert "pick one" in page and "https://x/juice" in page and "https://x/lemon" in page
+    assert 'href="https://x/juice"' in page.split("+1")[0]  # the first is the Product button
+    assert "https://x/lemon" in page.split("+1")[1]  # the other is in the menu
 
 
 def test_product_is_shared_between_items(env):
@@ -125,12 +127,16 @@ def test_also_available_and_ordering_from_there(env):
     client.post(f"{item}/stores", data={"preferred": "Natural Grocers", "stores": ["King Soopers"]})
     assert fake.stores_of("a") == {"Natural Grocers", "King Soopers"}
     page = client.get("/").text
-    assert "also at King Soopers" in section(page, "Natural Grocers (1)")
-    assert "King Soopers (0)" in sections(page)
+    assert "milk" in section(page, "Natural Grocers (1)")
+    also = section(page, "King Soopers (0)")  # listed greyed, and not counted
+    assert "milk" in also and "Preferred at Natural Grocers" in also
+    ks = sid(conn, "King Soopers")
+    assert f'value="a" form="ordered-{ks}"' in also  # it can be ticked to order from here
 
-    client.post(f"/stores/{sid(conn, 'King Soopers')}/ordered", data={"ids": ["a"]})
+    client.post(f"/stores/{ks}/ordered", data={"ids": ["a"]})
     page = client.get("/").text
     assert {"Natural Grocers (0)", "On the way (1)"} <= sections(page).keys()
+    assert "milk" not in section(page, "King Soopers (0)")
     client.post("/lines/not-received", data={"ids": ["a"]})
     assert "Natural Grocers (1)" in sections(client.get("/").text)
 
@@ -273,3 +279,16 @@ def test_kroger_search_runs_on_open_once_a_store_is_picked(env):
     page = client.get(item).text  # no product yet, so it searches straight away
     assert "kingsoopers.com/p/butter/0001" in page
     assert client.app.state.svc.kroger.searched_at == ["62000001"]
+
+
+def test_search_with_no_results_says_so(env):
+    client, conn, fake = env
+    fake.add("a", "butter", "King Soopers")
+    client.post("/sync")
+    item = f"/items/{item_of(conn, 'a')}"
+    client.post(
+        "/settings/kroger-location",
+        data={"id": "62000001", "name": "Test Marketplace", "address": "1 Main St"},
+    )
+    assert "No results" not in client.get(item).text
+    assert 'No results for "no such thing"' in client.get(f"{item}?q=no such thing").text

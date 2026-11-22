@@ -13,6 +13,8 @@ class FakeKroger:
 
     async def search(self, term: str, location_id: str) -> list[Product]:
         self.searched_at.append(location_id)
+        if term == "no such thing":
+            return []
         url = f"https://www.kingsoopers.com/p/{term}/0001"
         return [Product("0001", term.title(), "Brand", "1 lb", 1.99, None, url, None)]
 

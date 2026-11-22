@@ -156,13 +156,14 @@ def item_products(conn, item_id: int | None, store_id: int, enabled_only: bool =
 class LineView:
     row: sqlite3.Row
     products: list = field(default_factory=list)  # at the store it's listed under
-    also: list = field(default_factory=list)  # (store, products) for its other online stores
+    preferred_at: str | None = None  # on an "also here" row: the store it's listed under
 
 
 @dataclass
 class StoreGroup:
     store: sqlite3.Row
     lines: list[LineView] = field(default_factory=list)
+    also: list[LineView] = field(default_factory=list)  # preferred elsewhere, also sold here
 
 
 @dataclass
@@ -174,12 +175,14 @@ class ListView:
 
 
 def build_list(conn) -> ListView:
-    """Place every open line once.
+    """Place every open line once, plus "also here" copies under its other stores.
 
     A line goes under its preferred store: the item's, if that is one of the line's
-    AnyList stores, else the first of them in store order. Hand-pick items, lines whose
-    preferred store isn't one we order from online, and items a person marked as
-    "anywhere" go under "In person". Other lines with no store are the burndown list.
+    AnyList stores, else the first of them in store order. Its other online stores list
+    it again as "also here", so it can be ordered from there instead. Hand-pick items,
+    lines whose preferred store isn't one we order from online, and items a person
+    marked as "anywhere" go under "In person". Other lines with no store are the
+    burndown list.
     """
     stores = conn.execute("SELECT * FROM store ORDER BY sort").fetchall()
     view = ListView(stores=[StoreGroup(s) for s in stores if s["kind"] != "offline"])
@@ -213,16 +216,13 @@ def build_list(conn) -> ListView:
             view.in_person.append((row, primary["name"]))
             continue
         groups[primary["id"]].lines.append(
-            LineView(
-                row,
-                products=item_products(conn, row["item_id"], primary["id"]),
-                also=[
-                    (s, item_products(conn, row["item_id"], s["id"]))
-                    for s in at
-                    if s["id"] in groups and s["id"] != primary["id"]
-                ],
-            )
+            LineView(row, item_products(conn, row["item_id"], primary["id"]))
         )
+        for s in at:
+            if s["id"] in groups and s["id"] != primary["id"]:
+                groups[s["id"]].also.append(
+                    LineView(row, item_products(conn, row["item_id"], s["id"]), primary["name"])
+                )
     view.in_person.sort(key=lambda pair: (pair[1], pair[0]["name"].casefold()))
     return view
 
@@ -354,7 +354,8 @@ def _routes(app: FastAPI) -> None:
         if q is None and kroger_store and not products[kroger_store["id"]]:
             q = item["name"]  # nothing picked yet, so show matches straight away
         results, search_error = [], None
-        if q and kroger_store and svc.kroger and location:
+        searched = bool(q and kroger_store and svc.kroger and location)
+        if searched:
             try:
                 results = await svc.kroger.search(q, location.id)
             except Exception as e:
@@ -387,6 +388,7 @@ def _routes(app: FastAPI) -> None:
             results=results,
             used_by=used_by,
             search_error=search_error,
+            searched=searched,
             kroger_enabled=svc.kroger is not None,
             kroger_location=location,
             others=others,
@@ -448,12 +450,12 @@ def _routes(app: FastAPI) -> None:
             "SELECT id FROM product WHERE store_id = ? AND url = ?", (store_id, url.strip())
         ).fetchone()
         _link_product(conn, item_id, product_id)
-        return RedirectResponse(f"/items/{item_id}", status_code=303)
+        return RedirectResponse(f"/items/{item_id}#products", status_code=303)
 
     @app.post("/items/{item_id}/link-product")
     async def link_product(request: Request, item_id: int, product_id: Annotated[int, Form()]):
         _link_product(_svc(request).conn, item_id, product_id)
-        return RedirectResponse(f"/items/{item_id}", status_code=303)
+        return RedirectResponse(f"/items/{item_id}#products", status_code=303)
 
     @app.post("/items/{item_id}/products/{product_id}")
     async def update_item_product(
@@ -468,7 +470,7 @@ def _routes(app: FastAPI) -> None:
             "WHERE item_id = ? AND product_id = ?",
             (priority, int(enabled), item_id, product_id),
         )
-        return RedirectResponse(f"/items/{item_id}", status_code=303)
+        return RedirectResponse(f"/items/{item_id}#products", status_code=303)
 
     @app.post("/items/{item_id}/products/{product_id}/unlink")
     async def unlink_product(request: Request, item_id: int, product_id: int):
@@ -480,7 +482,7 @@ def _routes(app: FastAPI) -> None:
             "DELETE FROM product WHERE id = ? AND id NOT IN (SELECT product_id FROM item_product)",
             (product_id,),
         )
-        return RedirectResponse(f"/items/{item_id}", status_code=303)
+        return RedirectResponse(f"/items/{item_id}#products", status_code=303)
 
     @app.get("/settings")
     async def settings(request: Request, zip: str | None = None):

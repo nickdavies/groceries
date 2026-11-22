@@ -20,3 +20,29 @@ document.addEventListener("wa-select", (event) => {
   form.append(Object.assign(document.createElement("input"), { type: "hidden", name: "store", value }));
   form.submit();
 });
+
+// Item page product search: fetch the same page with ?q= and swap in its results,
+// instead of reloading. Falls back to a normal submit if the fetch fails.
+document.addEventListener("submit", async (event) => {
+  const form = event.target;
+  if (!form.matches("form.product-search")) return;
+  event.preventDefault();
+  const url = new URL(form.action, location.href);
+  url.search = new URLSearchParams(new FormData(form));
+  const button = form.querySelector("button");
+  const label = button.textContent;
+  button.disabled = true;
+  button.textContent = "Searching…";
+  try {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(response.statusText);
+    const page = new DOMParser().parseFromString(await response.text(), "text/html");
+    document.getElementById("search-results").replaceWith(page.getElementById("search-results"));
+    history.replaceState(null, "", url.pathname + url.search + "#products");
+  } catch {
+    form.submit();
+  } finally {
+    button.disabled = false;
+    button.textContent = label;
+  }
+});

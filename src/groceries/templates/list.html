@@ -9,19 +9,41 @@
   {%- if l.note %}<div class="note">{{ l.note }}</div>{% endif %}
 {% endmacro %}
 
-{% macro product_links(store, line, products) %}
-  {% if products|length > 1 %}
-    <span class="hint">pick one</span>
-    {% for p in products %}{% if not loop.first %}<span class="hint">or</span>{% endif %}
-    <wa-button size="s" appearance="outlined" href="{{ p.url }}" target="_blank" rel="noopener">{{ p.label }}<wa-icon slot="end" name="arrow-up-right-from-square"></wa-icon></wa-button>
-    {% endfor %}
-  {% elif products %}
-    <wa-button size="s" appearance="outlined" href="{{ products[0].url }}" target="_blank" rel="noopener">{{ products[0].label }}<wa-icon slot="end" name="arrow-up-right-from-square"></wa-icon></wa-button>
+{# The store's first product as one "Product" button, the same width on every row so a
+   column of them can be clicked straight down. Alternatives are in the menu beside it. #}
+{% macro product_cell(store, line, products) %}
+  {% if products %}
+  <wa-button-group label="Products">
+    <wa-button size="s" appearance="outlined" href="{{ products[0].url }}" target="_blank" rel="noopener"
+               title="{{ products[0].label }}">Product<wa-icon slot="end" name="arrow-up-right-from-square"></wa-icon></wa-button>
+    {% if products|length > 1 %}
+    <wa-dropdown placement="bottom-end">
+      <wa-button slot="trigger" size="s" appearance="outlined" with-caret title="Other products">+{{ products|length - 1 }}</wa-button>
+      {% for p in products %}
+      <wa-dropdown-item href="{{ p.url }}" target="_blank" rel="noopener">{{ p.label }}{% if loop.first %}<span slot="details" class="hint">first</span>{% endif %}</wa-dropdown-item>
+      {% endfor %}
+    </wa-dropdown>
+    {% endif %}
+  </wa-button-group>
   {% else %}
     {% set link = search_link(store, line.name) %}
-    {% if link %}<wa-button size="s" appearance="plain" href="{{ link }}" target="_blank" rel="noopener"><wa-icon slot="start" name="magnifying-glass"></wa-icon>Search {{ store.name }}</wa-button>{% endif %}
-    <wa-button size="s" appearance="plain" href="/items/{{ line.item_id }}"><wa-icon slot="start" name="plus"></wa-icon>Add product</wa-button>
+    {% if link %}<wa-button size="s" appearance="plain" href="{{ link }}" target="_blank" rel="noopener" title="Search {{ store.name }}"><wa-icon slot="start" name="magnifying-glass"></wa-icon>Search</wa-button>{% endif %}
+    <wa-button size="s" appearance="plain" href="/items/{{ line.item_id }}#products"><wa-icon slot="start" name="plus"></wa-icon>Add product</wa-button>
   {% endif %}
+{% endmacro %}
+
+{# A line in a store section. "Also here" lines (preferred elsewhere) are greyed, and can
+   still be ticked to order them from this store. #}
+{% macro store_line(store, lv) %}
+  {% set l = lv.row %}
+  <div class="row line{% if lv.preferred_at %} also{% endif %}">
+    <wa-checkbox name="ids" value="{{ l.anylist_item_id }}" form="ordered-{{ store.id }}"></wa-checkbox>
+    <div class="what">
+      {{ line_name(l) }}
+      {% if lv.preferred_at %}<div class="note">Preferred at {{ lv.preferred_at }}</div>{% endif %}
+    </div>
+    <div class="actions">{{ product_cell(store, l, lv.products) }}</div>
+  </div>
 {% endmacro %}
 
 {% block rail %}
@@ -83,43 +105,22 @@
 {% set sid = g.store.id %}
 <wa-card id="store-{{ sid }}">
   <h2 slot="header">{{ g.store.name }} {{ count(g.lines|length) }}</h2>
-  {% if g.lines %}
+  {% if g.lines or g.also %}
   <div slot="header-actions" class="card-actions">
     <form method="post" action="/stores/{{ sid }}/ordered" id="ordered-{{ sid }}"></form>
     <wa-button type="submit" form="ordered-{{ sid }}" size="s" variant="brand"><wa-icon slot="start" name="check"></wa-icon>Mark ticked ordered</wa-button>
+    {% if g.lines %}
     <form method="post" action="/stores/{{ sid }}/ordered">
       {% for lv in g.lines %}<input type="hidden" name="ids" value="{{ lv.row.anylist_item_id }}">{% endfor %}
       <wa-button type="submit" size="s" appearance="outlined">Mark all ordered</wa-button>
     </form>
+    {% endif %}
   </div>
-  {% for lv in g.lines %}
-  {% set l = lv.row %}
-  <div class="row">
-    <wa-checkbox name="ids" value="{{ l.anylist_item_id }}" form="ordered-{{ sid }}"></wa-checkbox>
-    <div class="what">{{ line_name(l) }}</div>
-    <div class="actions">
-      {{ product_links(g.store, l, lv.products) }}
-      {% if lv.also %}
-      {% set also_id = "also-%s-%s"|format(sid, loop.index) %}
-      <wa-button id="{{ also_id }}" size="s" appearance="plain" with-caret>
-        also at {{ lv.also[0][0].name if lv.also|length == 1 else "%d stores"|format(lv.also|length) }}</wa-button>
-      <wa-popover for="{{ also_id }}" placement="bottom-end">
-        <div class="popover-body">
-          {% for s, products in lv.also %}
-          {% if not loop.first %}<wa-divider></wa-divider>{% endif %}
-          <strong>{{ s.name }}</strong>
-          <div class="actions">{{ product_links(s, l, products) }}</div>
-          <form method="post" action="/stores/{{ s.id }}/ordered">
-            <input type="hidden" name="ids" value="{{ l.anylist_item_id }}">
-            <wa-button type="submit" size="s" variant="brand">Ordered from {{ s.name }}</wa-button>
-          </form>
-          {% endfor %}
-        </div>
-      </wa-popover>
-      {% endif %}
-    </div>
-  </div>
-  {% endfor %}
+  {% for lv in g.lines %}{{ store_line(g.store, lv) }}{% endfor %}
+  {% if g.also %}
+  <div class="group-label">Also here</div>
+  {% for lv in g.also %}{{ store_line(g.store, lv) }}{% endfor %}
+  {% endif %}
   {% else %}
   <div class="row hint">Nothing to order.</div>
   {% endif %}

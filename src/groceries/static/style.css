@@ -48,7 +48,7 @@ main h1 { margin: 0; font-size: var(--wa-font-size-2xl); }
 .rail .label { margin: var(--wa-space-m) var(--wa-space-s) var(--wa-space-2xs); }
 
 /* List page sections */
-wa-card, wa-details { scroll-margin-top: 80px; }
+wa-card, wa-details, #products { scroll-margin-top: 80px; }
 wa-card::part(body) { padding: 0; }
 wa-card h2, wa-details h2 {
   margin: 0; font-size: var(--wa-font-size-l);
@@ -67,16 +67,20 @@ wa-card h2, wa-details h2 {
 }
 .row:first-child, .group-label + .row { border-top: 0; }
 .row form { margin: 0; }
-.row .what { flex: 1; min-width: 0; }
+.row .what { flex: 1 1 10rem; min-width: 0; }
 .row .name { font-weight: var(--wa-font-weight-semibold); color: var(--wa-color-text-normal); text-decoration: none; }
 .row .name:hover { text-decoration: underline; }
 .row .note { color: var(--wa-color-text-quiet); font-size: var(--wa-font-size-s); }
 .actions { display: flex; flex-wrap: wrap; gap: var(--wa-space-xs); align-items: center; justify-content: flex-end; }
-.stores { display: flex; flex-wrap: wrap; align-items: center; gap: var(--wa-space-2xs); }
+.row .actions { flex: 0 1 auto; min-width: 0; }
+.stores { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--wa-space-2xs); }
 .group-label { padding: var(--wa-space-s) var(--wa-space-l) 0; }
 wa-details .group-label, wa-details .row { padding-inline: 0; }
-.popover-body { display: flex; flex-direction: column; align-items: flex-start; gap: var(--wa-space-s); min-width: 220px; }
-.popover-body .actions { justify-content: flex-start; }
+/* Store lines share one grid, so the Product buttons line up in a column. */
+.row.line { display: grid; grid-template-columns: auto minmax(0, 1fr) 15rem; }
+.row.line .actions { justify-content: flex-start; flex-wrap: nowrap; }
+.row.also { opacity: .55; }
+.row.also:hover, .row.also:focus-within { opacity: 1; }
 
 /* Items and Settings: sections as panels around Web Awesome's native form and table styles. */
 .panel {
@@ -111,7 +115,8 @@ table input[type=number] { width: 5em; }
   }
   wa-card::part(header) { padding: var(--wa-space-s) var(--wa-space-m); }
   .row { flex-wrap: wrap; padding: var(--wa-space-s) var(--wa-space-m); }
-  .row .actions { width: 100%; justify-content: flex-start; }
-  .row wa-checkbox ~ .actions { padding-left: 36px; }
+  .row .actions, .stores { width: 100%; justify-content: flex-start; }
+  .row.line { grid-template-columns: auto minmax(0, 1fr); }
+  .row.line .actions { grid-column: 2; }
   .panel { padding: var(--wa-space-m); }
 }

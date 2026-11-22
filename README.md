@@ -6,8 +6,9 @@ with product links to add to each store's online cart, and remembers what has be
 ordered.
 
 - **The list.** Every open line appears once. "No store yet" comes first, as the list of
-  lines still to sort out. Then a section per online store (its preferred store; "also
-  at" opens its other stores), then "In person", then "On the way".
+  lines still to sort out. Then a section per online store (its preferred store), then
+  "In person", then "On the way". A line's other online stores list it greyed under
+  "Also here", where it can be ticked to order it from that store instead.
 - **Stores.** Each item has a preferred store and any number of "also available" stores,
   and AnyList holds the same set on the item's lines. Changing it in either place updates
   the other, and the newer change wins. A new line takes the item's stores, since a line
@@ -20,7 +21,8 @@ ordered.
   every shopping cycle, so lines match items by normalized name, and typos or variants
   are merged on the item page.
 - **Products.** One product can serve several items (whole lemons for "lemon" and "lemon
-  juice"). Several products for one item at a store show as "pick one". King Soopers
+  juice"). An item's first product at a store is its Product link on the list, and any
+  others are in the menu beside it. King Soopers
   products come from the Kroger API search, and other stores take pasted links.
 - **Other stores.** AnyList stores we don't order from online (H-Mart, Safeway) are kept in
   an item's store set and listed under "In person". A store's type and search link are
