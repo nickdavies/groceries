@@ -33,16 +33,27 @@ ordered.
   reads that way. Stores cleared in AnyList put the item back under "No store yet".
 - **Notes.** An item can carry a short note shown next to its lines, e.g. which coffee
   shop.
-- **Names.** `/names` gives an item one name in AnyList. It lists every name in AnyList
-  (crossed-off lines and recipe ingredients too), and suggests merges:
-  - "likely the same": same words once prep words and plurals are set aside, or spelled
-    almost like an item;
-  - "contains another name": "garlic cloves" contains "garlic". Mark the wrong ones
-    "Not the same", and they stay hidden.
-
-  Compounds ("salt and pepper") and choices ("walnuts or chips") are listed separately.
+- **Names.** `/names` gives an item one name in AnyList. It knows every name in AnyList
+  (crossed-off lines and recipe ingredients too) and suggests merges as compact groups:
+  a name, and the names that look like it.
+  - **Merge groups.** Names with the same words (once prep words and plurals are set
+    aside) or a near-identical spelling start checked; names that only contain the
+    group's name ("garlic powder") start unchecked. Check the ones that are the same,
+    pick or type the name to keep, and Merge… opens a step to set each one's unit and
+    style. "Not the same" and Ignore act on the checked names and stay remembered.
+  - **Compounds** ("salt and pepper") and **choices** ("walnuts or chips") are listed
+    separately and never suggested.
+  - **All names.** `/names/all` lists every name, filterable by in an item, not in an
+    item, or ignored. Each name's page shows everywhere it's used, its item, unit and
+    style (typing a new item name there makes it an item of its own), ignoring, and
+    "not the same" pairs, which can be removed.
   - **Mapping.** Mapping a name into an item makes the item *canonical*: its other names
-    get rewritten to the item's name.
+    get rewritten to the item's name. Mapping another item's own name merges that item;
+    moving a name that's only another item's alias just moves the alias.
+  - **Cancelling.** Under Needs review, "Cancel this merge" takes a name back out of its
+    item, dropping its rewrites (it can be suggested again). "Stop rewriting this item"
+    turns an item's canonical flag off. Neither undoes rewrites already written; the
+    log and the recipe backup keep the old text.
   - **Unit and style.** Each mapped name carries an optional unit and style.
     - The unit joins a bare-number quantity: "3 garlic cloves" becomes "3 cloves Garlic".
     - The style goes in front of the ingredient's note or the line's details: "minced

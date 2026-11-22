@@ -102,6 +102,24 @@ table input[type=number] { width: 5em; }
 details.more, details.more summary { display: inline; border: 0; padding: 0; margin: 0; background: none; box-shadow: none; }
 details.more summary { cursor: pointer; text-decoration: underline dotted; list-style: none; }
 details.more summary::marker, details.more summary::-webkit-details-marker, details.more summary::after { display: none; content: none; }
+/* Names pages: compact checklists whose rows flow as text, and action rows where the
+   buttons stay together, so they wrap as one unit or not at all. */
+.checklist { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: var(--wa-space-2xs); }
+.checklist li { display: block; }
+.checklist label { display: inline; font-weight: var(--wa-font-weight-semibold); }
+.checklist input[type=checkbox] { vertical-align: middle; margin-inline-end: var(--wa-space-2xs); }
+.group-actions { display: flex; flex-wrap: wrap; gap: var(--wa-space-s); align-items: center; margin-top: var(--wa-space-s); }
+.group-actions .target { display: inline-flex; gap: var(--wa-space-xs); align-items: center; }
+.group-actions .target input { width: 16em; max-width: 60vw; }
+.group-actions .buttons { display: inline-flex; flex-wrap: nowrap; gap: var(--wa-space-xs); }
+wa-details.group::part(content) { padding-top: 0; }
+form.fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(12em, 1fr)); gap: var(--wa-space-s); align-items: end; }
+form.inline-button { display: inline; margin: 0; }
+form.fields button { justify-self: start; }
+table.names td:first-child { width: 30%; }
+table.merge input { width: 100%; }
+table.merge td:nth-child(2) { width: 8em; }
+table.merge td:nth-child(3) { width: 40%; }
 .hint.stale { color: var(--wa-color-warning-on-quiet); }
 .results img { width: 48px; height: 48px; object-fit: contain; }
 

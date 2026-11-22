@@ -1,0 +1,90 @@
+{# Macros shared by the names pages. Import with context: they read `sources`. #}
+
+{# The text the apps show, built from the fields. A recipe also stores its own display
+   text, which Android doesn't update on edit, so it can be stale: flag it when it differs. #}
+{% macro ingredient_text(t) %}{% set shown = compose(t.quantity, t.name, t.note) %}<code>{{ shown or '(empty)' }}</code>
+  <div class="hint">quantity “{{ t.quantity }}” · name “{{ t.name }}” · note “{{ t.note }}”</div>
+  {%- if t.raw.strip() != shown %}
+  <div class="hint stale">Stored display text doesn't match the fields: “{{ t.raw }}”</div>
+  {%- endif %}{% endmacro %}
+
+{% macro line_text(t) %}<code>{{ t.name }}</code>{% if t.details %} <span class="hint">details “{{ t.details }}”</span>{% endif %}{% endmacro %}
+
+{% macro describe(f) %}
+  {% if f.kind == 'ingredient' %}Recipe ingredient{% else %}List line{% endif %}
+  named <strong>“{{ f.name }}”</strong>
+  {% if f.kind == 'ingredient' %}with {% if f.extra %}note “{{ f.extra }}”{% else %}no note{% endif %},
+    quantity {{ 'a bare number' if f.bare_quantity else 'with a unit, or none' }}
+  {% elif f.extra %}with details “{{ f.extra }}”{% else %}with no details{% endif %}
+  → <strong>“{{ f.new_name }}”</strong>{% if f.unit %}, unit “{{ f.unit }}”{% endif %}{% if f.style %}, style “{{ f.style }}”{% endif %}
+{% endmacro %}
+
+{% macro name_link(key, label) %}<a href="/names/name?key={{ key|urlencode }}">{{ label }}</a>{% endmacro %}
+
+{# Where a name is used, from the last sync: line counts, then up to three recipes with the
+   rest behind "more". The recipes come last because an open <details> is laid out as a
+   block, so nothing can follow it on the same line. #}
+{% macro where(key, fallback='') %}{% set s = sources.get(key) %}
+  {%- if not s %}{{ fallback }}{% else %}
+    {%- if s.open or s.crossed_off %}
+      {%- if s.open %}{{ s.open }} open{% endif %}{% if s.open and s.crossed_off %} and {% endif %}
+      {%- if s.crossed_off %}{{ s.crossed_off }} crossed-off{% endif %} {{ 'line' if s.open + s.crossed_off == 1 else 'lines' }}
+      {%- if s.recipes %} · {% endif %}
+    {%- endif %}
+    {%- if s.recipes %}in {{ s.recipes[:3]|join(', ') }}
+      {%- if s.recipes|length > 3 %} <details class="more"><summary>+{{ s.recipes|length - 3 }} more</summary>{{ s.recipes[3:]|join(', ') }}</details>{% endif %}
+    {%- endif %}
+  {%- endif %}
+{%- endmacro %}
+
+{# Rewrites waiting for review, grouped by item and approval. Cancel unmaps the name, and
+   Stop rewriting turns the item's canonical flag off; both discard their rewrites. #}
+{% macro review_list(review) %}
+<form method="post" action="/names/approve">
+  {% for r in review %}
+  <section>
+    <h3><a href="/items/{{ r.item.id }}#names">{{ r.item.name }}</a>
+      <button class="wa-outlined" formaction="/items/{{ r.item.id }}/stop-rewriting"
+              onclick='return confirm({{ ("Stop rewriting “%s” in AnyList? Its waiting rewrites are dropped; its names stay mapped." % r.item.name)|tojson }})'>Stop rewriting this item</button></h3>
+    {% for g in r.groups %}
+    {% set key = normalize(g.form.name) %}
+    <wa-details open>
+      <span slot="summary">
+        {% if g.approved %}
+          <wa-badge variant="{{ 'warning' if g.changes[0].held else 'neutral' }}">{{ 'held back' if g.changes[0].held else 'approved, not written yet' }}</wa-badge>
+        {% else %}
+          <input type="checkbox" name="forms" value="{{ g.form.to_json() }}" onclick="event.stopPropagation()">
+        {% endif %}
+        {{ describe(g.form) }} <span class="hint">({{ g.changes|length }} {{ 'place' if g.changes|length == 1 else 'places' }})</span>
+      </span>
+      <table>
+        <thead><tr><th>Where</th><th>Now</th><th>After</th></tr></thead>
+        <tbody>
+        {% for c in g.changes %}
+          <tr>
+            <td>{{ c.place }}{% if c.held %}<div class="hint">Held: {{ c.held }}</div>{% endif %}</td>
+            {% if c.form.kind == 'ingredient' %}
+            <td>{{ ingredient_text(c.old) }}</td><td>{{ ingredient_text(c.new) }}</td>
+            {% else %}
+            <td>{{ line_text(c.old) }}</td><td>{{ line_text(c.new) }}</td>
+            {% endif %}
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      <div class="group-actions">
+        {% if key != normalize(r.item.name) %}
+        <button class="wa-outlined wa-danger" formaction="/names/unmap" name="key" value="{{ key }}"
+                onclick='return confirm({{ ("Cancel merging “%s” into “%s”? It goes back to being its own name." % (g.form.name, r.item.name))|tojson }})'>Cancel this merge</button>
+        {% else %}
+        <span class="hint">This is “{{ r.item.name }}” spelled differently; to leave it, stop rewriting the item.</span>
+        {% endif %}
+        {{ name_link(key, 'Name details') }}
+      </div>
+    </wa-details>
+    {% endfor %}
+  </section>
+  {% endfor %}
+  <button class="wa-brand">Approve and write selected</button>
+</form>
+{% endmacro %}

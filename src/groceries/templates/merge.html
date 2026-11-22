@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% from "_names.html" import where with context %}
+{% block title %}Merge into {{ target }}{% endblock %}
+
+{% block content %}
+<h1>Merge into “{{ target }}”</h1>
+<p class="hint">{% if target_exists %}“{{ target }}” is an item{% else %}This creates the item “{{ target }}”{% endif %}, and its names are rewritten to “{{ target }}” in AnyList once you approve them under Needs review. The unit joins a bare-number quantity (“3” becomes “3 cloves”); the style goes in front of the note (“minced”). Both start from the words that differ from “{{ target }}”.</p>
+
+<form method="post" action="/names/merge" class="panel">
+  <input type="hidden" name="target" value="{{ target }}">
+  <table class="merge">
+    <thead><tr><th>Name</th><th>Unit</th><th>Style</th></tr></thead>
+    <tbody>
+    {% for key, label, found, own, unit, style in entries %}
+      <tr>
+        <td><input type="hidden" name="keys" value="{{ key }}"><strong>{{ label }}</strong>
+          <div class="hint">{{ where(key) }}</div>
+          {% if found and normalize(found.item_name) != normalize(target) %}
+          <div class="hint stale">{% if own %}Merges the item “{{ found.item_name }}”: its stores and products move here{% else %}Moves out of the item “{{ found.item_name }}”{% endif %}</div>
+          {% endif %}</td>
+        <td><input name="units" value="{{ unit }}" placeholder="e.g. cloves" size="8"></td>
+        <td><input name="styles" value="{{ style }}" placeholder="e.g. minced"></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <div class="group-actions">
+    <button class="wa-brand">Merge {{ entries|length }} {{ 'name' if entries|length == 1 else 'names' }}</button>
+    <a href="/names#merge">Back</a>
+  </div>
+</form>
+{% endblock %}

@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% from "_names.html" import review_list, name_link with context %}
+{% block title %}{{ label }}{% endblock %}
+
+{% block content %}
+{% set used = sources.get(key) %}
+<h1>{{ label }}</h1>
+<p class="hint"><a href="/names/all">All names</a>
+  {% if row and row.spellings %}{% set spellings = loads(row.spellings) %}{% if spellings|length > 1 %} · spelled {{ spellings|join(', ') }}{% endif %}{% endif %}</p>
+
+<div class="panel">
+<h2>Where it's used</h2>
+{% if used %}
+  {% if used.recipes %}<p>In {{ used.recipes|length }} {{ 'recipe' if used.recipes|length == 1 else 'recipes' }}: {{ used.recipes|join(', ') }}</p>{% endif %}
+  {% if used.open or used.crossed_off %}<p>On Shared List: {{ used.open }} open and {{ used.crossed_off }} crossed-off {{ 'line' if used.open + used.crossed_off == 1 else 'lines' }}</p>{% endif %}
+{% elif row %}
+  <p class="hint">{{ row.line_count }} lines and {{ row.recipe_count }} recipe ingredients at the last sync.</p>
+{% else %}
+  <p class="hint">Not in AnyList at the last sync.</p>
+{% endif %}
+</div>
+
+<div class="panel" id="item">
+<h2>Item</h2>
+{% if found %}
+<p>In <a href="/items/{{ found.item_id }}">{{ found.item_name }}</a>{% if own %}: this is the item's own name{% endif %}.
+  {% if not found.canonical %}<span class="hint">The item isn't rewritten in AnyList yet; merging or saving here turns that on.</span>{% endif %}</p>
+{% else %}
+<p class="hint">Not in an item. Map it into one, or type a new name to make it an item of its own (a rename).</p>
+{% endif %}
+{% if own %}
+<p class="hint">To rename it, rename the item. To leave its spellings alone, use Stop rewriting under Needs review or untick “Use this name in AnyList” on the item.</p>
+{% else %}
+<datalist id="item-names">{% for i in items %}<option value="{{ i.name }}">{% endfor %}</datalist>
+<form method="post" action="/names/map" class="fields">
+  <input type="hidden" name="key" value="{{ key }}">
+  <label>Item <input name="target_name" value="{{ found.item_name if found else '' }}" list="item-names" placeholder="an item, or a new name" required></label>
+  <label>Unit <input name="unit" value="{{ found.unit if found else '' }}" placeholder="e.g. cloves"></label>
+  <label>Style <input name="style" value="{{ found.style if found else '' }}" placeholder="e.g. minced"></label>
+  <button class="wa-brand">{{ 'Save' if found else 'Map' }}</button>
+</form>
+{% if found %}
+<form method="post" action="/names/unmap">
+  <input type="hidden" name="key" value="{{ key }}">
+  <button class="wa-outlined wa-danger">Take it out of {{ found.item_name }}</button>
+</form>
+{% endif %}
+{% endif %}
+</div>
+
+{% if review %}
+<div class="panel" id="review">
+<h2>Waiting for review</h2>
+{{ review_list(review) }}
+</div>
+{% endif %}
+
+<div class="panel" id="suggestions">
+<h2>Suggestions</h2>
+{% if row %}
+<form method="post" action="/names/ignore">
+  <input type="hidden" name="keys" value="{{ key }}">
+  <input type="hidden" name="ignored" value="{{ 'false' if row.ignored else 'true' }}">
+  {% if row.ignored %}<p>Ignored: it's never suggested.</p><button class="wa-outlined">Stop ignoring it</button>
+  {% else %}<button class="wa-outlined">Ignore it in suggestions</button>{% endif %}
+</form>
+{% endif %}
+{% if distinct %}
+<p>Marked not the same as:</p>
+<ul class="checklist">
+  {% for other, other_label in distinct %}
+  <li>{{ name_link(other, other_label) }}
+    <form method="post" action="/names/distinct/remove" class="inline-button">
+      <input type="hidden" name="a" value="{{ key }}"><input type="hidden" name="b" value="{{ other }}">
+      <button class="wa-outlined">Remove</button>
+    </form></li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="hint">Not marked “not the same” as anything.</p>
+{% endif %}
+</div>
+{% endblock %}

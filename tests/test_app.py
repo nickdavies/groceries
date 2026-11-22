@@ -296,66 +296,170 @@ def test_search_with_no_results_says_so(env):
     assert 'No results for "no such thing"' in client.get(f"{item}?q=no such thing").text
 
 
-def test_names_flow_from_suggestion_to_written(env):
+def text_of(html_: str) -> str:
+    return " ".join(html.unescape(re.sub(r"<[^>]+>", " ", html_)).split())
+
+
+def checked_keys(group_html: str) -> dict[str, bool]:
+    """Each checkbox in a merge group: its key and whether it starts checked."""
+    boxes = re.findall(r'<input type="checkbox" name="keys" value="([^"]+)"( checked)?', group_html)
+    return {html.unescape(k): bool(c) for k, c in boxes}
+
+
+def names_page(client) -> str:
+    return client.get("/names").text
+
+
+def test_merge_flow_from_group_to_written(env):
     client, conn, fake = env
     fake.add("a", "Shallot", "King Soopers")
     fake.add("b", "minced shallot", checked=True)
+    fake.add("c", "banana shallot", checked=True)
     fake.add_recipe("r", "Chicken au Poivre", ("i", "2 tablespoons", "minced shallot", ""))
-    fake.add_recipe("s", "Soup", ("j", "", "salt and pepper", "to taste"))
     client.post("/sync")
 
-    page = client.get("/names").text
-    suggestions = section(page, "Likely the same")
-    assert "minced shallot" in suggestions and "same words" in suggestions
-    assert "salt and pepper" in section(page, "Compounds and choices")
-    assert "Nothing to review" in section(page, "Needs review")
+    group = section(names_page(client), "Merge suggestions")
+    assert checked_keys(group) == {"shallot": True, "minced shallot": True, "banana shallot": False}
 
-    shallot = conn.execute("SELECT id FROM item WHERE name = 'Shallot'").fetchone()[0]
+    confirm = client.get(
+        "/names/merge", params={"target": "Shallot", "keys": ["shallot", "minced shallot"]}
+    ).text
+    assert "Merge into “Shallot”" in confirm and 'value="minced"' in confirm
+    assert 'value="shallot"' not in confirm  # the canonical name isn't merged into itself
     client.post(
-        "/names/map",
-        data={"key": "minced shallot", "target_id": shallot, "unit": "", "style": "minced"},
+        "/names/merge",
+        data={"target": "Shallot", "keys": ["minced shallot"], "units": [""], "styles": ["minced"]},
     )
-    review = section(client.get("/names").text, "Needs review")
-    assert "2 tablespoons minced shallot" in review and "2 tablespoons Shallot, minced" in review
-    assert "Shared List, crossed off" in review
-    assert fake.ingredient_writes == [] and fake.line_writes == []
 
+    review = section(names_page(client), "Needs review")
+    assert "2 tablespoons Shallot, minced" in text_of(review)
+    assert fake.ingredient_writes == [] and fake.line_writes == []
     forms = [html.unescape(v) for v in re.findall(r'name="forms" value="([^"]+)"', review)]
-    assert len(forms) == 2
-    client.post("/names/approve", data={"forms": forms[:1]})
-    assert len(fake.ingredient_writes) + len(fake.line_writes) == 1
-    client.post("/names/approve", data={"forms": forms[1:]})
+    client.post("/names/approve", data={"forms": forms})
     assert fake.ingredient("r", "i").raw == "2 tablespoons Shallot, minced"
     assert fake.lines["b"].name == "Shallot"
-
-    page = client.get("/names").text
-    assert "Nothing to review" in section(page, "Needs review")
-    assert "Chicken au Poivre" in section(page, "Recent rewrites")
+    assert "Chicken au Poivre" in section(names_page(client), "Recent rewrites")
 
 
-def test_not_the_same_and_ignore_hide_suggestions(env):
+def test_merging_into_a_new_name_creates_the_item(env):
+    client, conn, fake = env
+    fake.add("a", "minced shallot", checked=True)
+    fake.add("b", "shallots, chopped", checked=True)
+    client.post("/sync")
+    client.post(
+        "/names/merge",
+        data={
+            "target": "Shallots",
+            "keys": ["minced shallot", "shallots, chopped"],
+            "units": ["", ""],
+            "styles": ["minced", "chopped"],
+        },
+    )
+    row = conn.execute("SELECT id, canonical FROM item WHERE name = 'Shallots'").fetchone()
+    assert row["canonical"] == 1
+    refs = conn.execute("SELECT external_id, style FROM external_ref WHERE item_id = ? ORDER BY 1",
+                        (row["id"],)).fetchall()  # fmt: skip
+    assert [tuple(r) for r in refs] == [
+        ("minced shallot", "minced"),
+        ("shallots", ""),
+        ("shallots, chopped", "chopped"),
+    ]
+
+
+def test_merging_into_another_items_alias_is_refused(env):
+    client, conn, fake = env
+    fake.add("a", "Garlic", "King Soopers")
+    fake.add("b", "garlic cloves", checked=True)
+    fake.add("c", "minced garlic", checked=True)
+    client.post("/sync")
+    client.post("/names/map", data={"key": "garlic cloves", "target_name": "Garlic"})
+    response = client.post(
+        "/names/merge",
+        data={"target": "Garlic cloves", "keys": ["minced garlic"], "units": [""], "styles": [""]},
+    )
+    assert response.status_code == 409
+
+
+def test_not_the_same_and_ignore_act_on_checked_names_but_not_the_target(env):
     client, conn, fake = env
     fake.add("a", "Lemon", "King Soopers")
     fake.add("b", "Lemon juice", checked=True)
     fake.add("c", "Lemon curd", checked=True)
     client.post("/sync")
-    assert "Lemon juice" in section(client.get("/names").text, "Contains another name")
-    client.post("/names/distinct", data={"a": "lemon juice", "b": "lemon"})
-    client.post("/names/ignore", data={"key": "lemon curd"})
-    suggestions = section(client.get("/names").text, "Contains another name")
-    assert "Lemon juice" not in suggestions and "Lemon curd" not in suggestions
+    client.post("/names/distinct", data={"other": "lemon", "keys": ["lemon", "lemon juice"]})
+    client.post("/names/ignore", data={"other": "lemon", "keys": ["lemon", "lemon curd"]})
+    assert [tuple(r) for r in conn.execute("SELECT a, b FROM name_distinct")] == [
+        ("lemon", "lemon juice")
+    ]
+    ignored = conn.execute("SELECT key FROM anylist_name WHERE ignored").fetchall()
+    assert [r[0] for r in ignored] == ["lemon curd"]
+    assert "No suggestions" in section(names_page(client), "Merge suggestions")
 
 
-def test_map_by_name_creates_the_item(env):
+def test_cancel_a_merge_from_review(env):
     client, conn, fake = env
-    fake.add_recipe("r", "Pie", ("i", "3", "Eggs, whites", ""))
+    fake.add("a", "Garlic", "King Soopers")
+    fake.add("b", "garlic cloves", checked=True)
+    fake.add("c", "garlic", checked=True)  # its own name, spelled differently
     client.post("/sync")
-    client.post(
-        "/names/map", data={"key": "eggs, whites", "target_name": "Eggs", "style": "whites"}
+    client.post("/names/map", data={"key": "garlic cloves", "target_name": "Garlic"})
+    review = section(names_page(client), "Needs review")
+    assert review.count("Cancel this merge") == 1  # not for its own name
+
+    client.post("/names/unmap", data={"key": "garlic cloves"})
+    review = text_of(section(names_page(client), "Needs review"))
+    assert "garlic cloves" not in review and "List line named “garlic”" in review
+    assert conn.execute("SELECT count(*) FROM name_distinct").fetchone()[0] == 0
+
+    garlic = conn.execute("SELECT id FROM item WHERE name = 'Garlic'").fetchone()[0]
+    client.post(f"/items/{garlic}/stop-rewriting")
+    assert "Nothing to review" in section(names_page(client), "Needs review")
+
+
+def test_all_names_filters_and_shows_where_each_is_used(env):
+    client, conn, fake = env
+    fake.add("a", "Flour", "King Soopers")
+    fake.add("b", "all-purpose flour", checked=True)
+    fake.add("c", "all-purpose flour", checked=True)
+    for i, recipe in enumerate(["Scones", "Banana Bread", "Pancakes", "Choux Pastry", "Pie"]):
+        fake.add_recipe(f"r{i}", recipe, ("i", "1 cup", "all-purpose flour", ""))
+    fake.add_recipe("s", "Bread", ("i", "500g", "bread flour", "sifted"))
+    client.post("/sync")
+
+    page = text_of(client.get("/names/all", params={"q": "flour"}).text)
+    assert "3 names" in page
+    assert (
+        "2 crossed-off lines · in Banana Bread, Choux Pastry, Pancakes +2 more Pie, Scones" in page
     )
-    row = conn.execute("SELECT id, canonical FROM item WHERE name = 'Eggs'").fetchone()
-    assert row["canonical"] == 1
-    assert "3 Eggs, whites" in section(client.get("/names").text, "Needs review")
+    assert "in Bread" in page and "1 open line" in page
+    mapped = text_of(client.get("/names/all", params={"q": "flour", "show": "mapped"}).text)
+    assert "1 name" in mapped and "Flour" in mapped
+
+
+def test_name_page_maps_renames_and_undoes(env):
+    client, conn, fake = env
+    fake.add("a", "Avocadoes", checked=True)
+    fake.add_recipe("r", "Burrito Bowls", ("i", "2", "Avocadoes", "sliced"))
+    client.post("/sync")
+    page = text_of(client.get("/names/name", params={"key": "avocadoes"}).text)
+    assert "In 1 recipe: Burrito Bowls" in page and "Not in an item" in page
+
+    client.post("/names/map", data={"key": "avocadoes", "target_name": "Avocados"})
+    page = text_of(client.get("/names/name", params={"key": "avocadoes"}).text)
+    assert "In Avocados ." in page and "Waiting for review" in page
+    assert "2 Avocados, sliced" in page
+
+    client.post("/names/distinct", data={"other": "avocadoes", "keys": ["avocado toast"]})
+    client.post("/names/ignore", data={"keys": ["avocadoes"]})
+    page = text_of(client.get("/names/name", params={"key": "avocadoes"}).text)
+    assert "Stop ignoring it" in page and "Marked not the same as" in page
+    client.post("/names/ignore", data={"keys": ["avocadoes"], "ignored": "false"})
+    client.post("/names/distinct/remove", data={"a": "avocadoes", "b": "avocado toast"})
+    page = text_of(client.get("/names/name", params={"key": "avocadoes"}).text)
+    assert "Ignore it in suggestions" in page and "Not marked" in page
+
+    client.post("/names/unmap", data={"key": "avocadoes"})
+    assert "Not in an item" in text_of(client.get("/names/name", params={"key": "avocadoes"}).text)
 
 
 def test_item_aliases_edit_and_split_off(env):
@@ -364,13 +468,12 @@ def test_item_aliases_edit_and_split_off(env):
     fake.add("b", "garlic cloves", checked=True)
     client.post("/sync")
     garlic = conn.execute("SELECT id FROM item WHERE name = 'Garlic'").fetchone()[0]
-    client.post("/names/map", data={"key": "garlic cloves", "target_id": garlic})
+    client.post("/names/map", data={"key": "garlic cloves", "target_name": "Garlic"})
     client.post(f"/items/{garlic}/aliases", data={"key": "garlic cloves", "unit": "cloves"})
     ref = conn.execute("SELECT unit FROM external_ref WHERE external_id = 'garlic cloves'")
     assert ref.fetchone()[0] == "cloves"
-    assert "Split off" in client.get(f"/items/{garlic}").text
     client.post(f"/items/{garlic}/aliases/split", data={"key": "garlic cloves"})
-    assert "Nothing to review" in section(client.get("/names").text, "Needs review")
+    assert "Nothing to review" in section(names_page(client), "Needs review")
 
 
 def test_renaming_an_item_to_another_items_name_is_refused(env):
@@ -387,28 +490,6 @@ def test_renaming_an_item_to_another_items_name_is_refused(env):
     assert tuple(row) == ("Yellow Onion", 1)
 
 
-def test_names_show_where_each_name_is_used(env):
-    client, conn, fake = env
-    fake.add("a", "Flour", "King Soopers")
-    fake.add("b", "all-purpose flour", checked=True)
-    fake.add("c", "all-purpose flour", checked=True)
-    for i, recipe in enumerate(["Scones", "Banana Bread", "Pancakes", "Choux Pastry", "Pie"]):
-        fake.add_recipe(f"r{i}", recipe, ("i", "1 cup", "all-purpose flour", ""))
-    fake.add_recipe("s", "Bread", ("i", "500g", "bread flour", "sifted"))
-    client.post("/sync")
-
-    found = section(client.get("/names", params={"q": "flour"}).text, "All names")
-    text = " ".join(re.sub(r"<[^>]+>", " ", found).split())
-    assert (
-        "in Banana Bread, Choux Pastry, Pancakes +2 more Pie, Scones · 2 crossed-off lines" in text
-    )
-    assert "in Bread" in text
-    assert "1 open line" in text
-
-    suggestions = section(client.get("/names").text, "Contains another name")
-    assert "in Bread" in suggestions  # "bread flour" contains "Flour"
-
-
 def test_review_shows_the_fields_and_flags_stale_display_text(env):
     client, conn, fake = env
     fake.add("a", "Avocados", "King Soopers")
@@ -416,8 +497,7 @@ def test_review_shows_the_fields_and_flags_stale_display_text(env):
     # Edited on Android: the fields changed, the stored display text didn't.
     fake.recipes["r"][1]["i"] = IngredientText("2", "Avocadoes", "sliced", "1 Avocado, sliced")
     client.post("/sync")
-    avocados = conn.execute("SELECT id FROM item WHERE name = 'Avocados'").fetchone()[0]
-    client.post("/names/map", data={"key": "avocadoes", "target_id": avocados})
+    client.post("/names/map", data={"key": "avocadoes", "target_name": "Avocados"})
 
     review = " ".join(
         re.sub(r"<[^>]+>", " ", section(client.get("/names").text, "Needs review")).split()

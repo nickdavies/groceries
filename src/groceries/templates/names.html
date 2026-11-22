@@ -1,161 +1,67 @@
 {% extends "base.html" %}
+{% from "_names.html" import review_list, where, name_link with context %}
 {% block title %}Names{% endblock %}
-
-{# The text the apps show, built from the fields. A recipe also stores its own display
-   text, which Android doesn't update on edit, so it can be stale: flag it when it differs. #}
-{% macro ingredient_text(t) %}{% set shown = compose(t.quantity, t.name, t.note) %}<code>{{ shown or '(empty)' }}</code>
-  <div class="hint">quantity “{{ t.quantity }}” · name “{{ t.name }}” · note “{{ t.note }}”</div>
-  {%- if t.raw.strip() != shown %}
-  <div class="hint stale">Stored display text doesn't match the fields: “{{ t.raw }}”</div>
-  {%- endif %}{% endmacro %}
-
-{% macro line_text(t) %}<code>{{ t.name }}</code>{% if t.details %} <span class="hint">details “{{ t.details }}”</span>{% endif %}{% endmacro %}
-
-{% macro describe(f) %}
-  {% if f.kind == 'ingredient' %}Recipe ingredient{% else %}List line{% endif %}
-  named <strong>“{{ f.name }}”</strong>
-  {% if f.kind == 'ingredient' %}with {% if f.extra %}note “{{ f.extra }}”{% else %}no note{% endif %},
-    quantity {{ 'a bare number' if f.bare_quantity else 'with a unit, or none' }}
-  {% elif f.extra %}with details “{{ f.extra }}”{% else %}with no details{% endif %}
-  → <strong>“{{ f.new_name }}”</strong>{% if f.unit %}, unit “{{ f.unit }}”{% endif %}{% if f.style %}, style “{{ f.style }}”{% endif %}
-{% endmacro %}
-
-{# Where a name is used, from the last sync: up to three recipes, the rest behind "more". #}
-{% macro where(key, fallback='') %}{% set s = sources.get(key) %}
-  {%- if not s %}{{ fallback }}{% else %}
-    {%- if s.recipes %}in {{ s.recipes[:3]|join(', ') }}
-      {%- if s.recipes|length > 3 %} <details class="more"><summary>+{{ s.recipes|length - 3 }} more</summary>{{ s.recipes[3:]|join(', ') }}</details>{% endif %}
-    {%- endif %}
-    {%- if s.open or s.crossed_off %}{% if s.recipes %} · {% endif %}
-      {%- if s.open %}{{ s.open }} open{% endif %}{% if s.open and s.crossed_off %} and {% endif %}
-      {%- if s.crossed_off %}{{ s.crossed_off }} crossed-off{% endif %} {{ 'line' if s.open + s.crossed_off == 1 else 'lines' }}
-    {%- endif %}
-  {%- endif %}
-{%- endmacro %}
-
-{% macro map_fields(unit, style) %}
-  <input name="unit" value="{{ unit }}" placeholder="unit (e.g. cloves)" size="10">
-  <input name="style" value="{{ style }}" placeholder="style, goes in the note (e.g. minced)">
-{% endmacro %}
 
 {% block content %}
 <h1>Names</h1>
-<p class="hint">Give an item one name in AnyList. Map variant names into an item here, then approve the exact rewrites it makes to recipes and list lines. A later occurrence is only rewritten without asking if it matches an approved rewrite exactly; anything else waits here.</p>
-
-<datalist id="item-names">{% for i in items %}<option value="{{ i.name }}">{% endfor %}</datalist>
+<p class="hint">Give an item one name in AnyList. Merge the names that mean the same thing, then approve the exact rewrites it makes to recipes and list lines. A later occurrence is only rewritten without asking if it matches an approved rewrite exactly; anything else waits here. <a href="/names/all">All names</a> lists every name to look up or edit.</p>
 
 <div class="panel" id="review">
 <h2>Needs review {{ review|map(attribute='groups')|map('length')|sum }}</h2>
-{% if not svc.snapshot %}<p class="hint">Sync first to see what would change.</p>{% endif %}
-{% if review %}
-<form method="post" action="/names/approve">
-  {% for r in review %}
-  <section>
-    <h3><a href="/items/{{ r.item.id }}#names">{{ r.item.name }}</a></h3>
-    {% for g in r.groups %}
-    <wa-details open>
-      <span slot="summary">
-        {% if g.approved %}
-          <wa-badge variant="{{ 'warning' if g.changes[0].held else 'neutral' }}">{{ 'held back' if g.changes[0].held else 'approved, not written yet' }}</wa-badge>
-        {% else %}
-          <input type="checkbox" name="forms" value="{{ g.form.to_json() }}" onclick="event.stopPropagation()">
-        {% endif %}
-        {{ describe(g.form) }} <span class="hint">({{ g.changes|length }} {{ 'place' if g.changes|length == 1 else 'places' }})</span>
-      </span>
-      <table>
-        <thead><tr><th>Where</th><th>Now</th><th>After</th></tr></thead>
-        <tbody>
-        {% for c in g.changes %}
-          <tr>
-            <td>{{ c.place }}{% if c.held %}<div class="hint">Held: {{ c.held }}</div>{% endif %}</td>
-            {% if c.form.kind == 'ingredient' %}
-            <td>{{ ingredient_text(c.old) }}</td><td>{{ ingredient_text(c.new) }}</td>
-            {% else %}
-            <td>{{ line_text(c.old) }}</td><td>{{ line_text(c.new) }}</td>
-            {% endif %}
-          </tr>
-        {% endfor %}
-        </tbody>
-      </table>
-    </wa-details>
-    {% endfor %}
-  </section>
-  {% endfor %}
-  <button class="wa-brand">Approve and write selected</button>
-</form>
-{% elif svc.snapshot %}
-<p class="hint">Nothing to review.</p>
-{% endif %}
+{% if not svc.snapshot %}<p class="hint">Sync first to see what would change.</p>
+{% elif review %}{{ review_list(review) }}
+{% else %}<p class="hint">Nothing to review.</p>{% endif %}
 </div>
 
-{% macro suggestion_panel(id, title, groups, hint) %}
-<div class="panel" id="{{ id }}">
-<h2>{{ title }} {{ groups|map(attribute=1)|map('length')|sum }}</h2>
-<p class="hint">{{ hint }} Mapping a name makes the item's AnyList name canonical, and its rewrites then appear under Needs review. Nothing is written until you approve.</p>
-{% for target, group in groups %}
-<section>
-  <h3>{% if target.item_id %}<a href="/items/{{ target.item_id }}">{{ target.label }}</a>{% else %}{{ target.label }} <wa-badge variant="neutral" appearance="outlined">new item</wa-badge>{% endif %}
-    <span class="hint">{{ where(target.key) }}</span></h3>
-  {% for s in group %}
-  <form method="post" action="/names/map" class="inline">
-    <input type="hidden" name="key" value="{{ s.alias.key }}">
-    <input type="hidden" name="a" value="{{ s.alias.key }}">
-    <input type="hidden" name="b" value="{{ s.target.key }}">
-    {% if target.item_id %}<input type="hidden" name="target_id" value="{{ target.item_id }}">
-    {% else %}<input type="hidden" name="target_name" value="{{ target.label }}">{% endif %}
-    <span><strong>{{ s.alias.label }}</strong> <span class="hint">{{ s.reason }} · {{ where(s.alias.key, 'used %d×' % s.alias.count) }}
-      {% if s.alias.item_id and s.alias.item_id != target.item_id %} · merges item “{{ s.alias.item_name }}” (its stores and products move){% endif %}</span></span>
-    {{ map_fields(s.unit, s.style) }}
-    <button class="wa-brand">Map</button>
-    <button class="wa-outlined" formaction="/names/distinct">Not the same</button>
-    <button class="wa-outlined" formaction="/names/ignore">Ignore</button>
+<div class="panel" id="merge">
+<h2>Merge suggestions {{ groups|length }}</h2>
+<p class="hint">Each group is a name and the names that look like it. Check the ones that are the same thing, pick (or type) the name to keep, and Merge… to set each one's unit and style. Names that only contain the group's name start unchecked: they're often different things (“garlic powder”).</p>
+{% for g in groups %}
+<wa-details class="group">
+  <span slot="summary"><strong>{{ g.target.label }}</strong>
+    {% if g.target.item_id %}<wa-badge variant="neutral" appearance="outlined">item</wa-badge>{% endif %}
+    <span class="hint">+{{ g.suggestions|length }}: {{ g.suggestions[:3]|map(attribute='alias.label')|join(', ') }}{% if g.suggestions|length > 3 %}, …{% endif %}</span></span>
+  <form method="get" action="/names/merge">
+    <input type="hidden" name="other" value="{{ g.target.key }}">
+    <ul class="checklist">
+      <li><label><input type="checkbox" name="keys" value="{{ g.target.key }}" checked> <strong>{{ g.target.label }}</strong></label>
+        <span class="hint">{{ where(g.target.key) }}</span></li>
+      {% for s in g.suggestions %}
+      <li><label><input type="checkbox" name="keys" value="{{ s.alias.key }}" {{ '' if s.reason.startswith('contains') else 'checked' }}> {{ s.alias.label }}</label>
+        <span class="hint">{{ s.reason }} · {{ where(s.alias.key, 'used %d×' % s.alias.count) }}{% if s.alias.item_name and s.alias.item_id != g.target.item_id %} · now in “{{ s.alias.item_name }}”{% endif %}</span></li>
+      {% endfor %}
+    </ul>
+    <div class="group-actions">
+      <span class="target"><label for="target-{{ loop.index }}">Merge checked into</label>
+        <input id="target-{{ loop.index }}" name="target" value="{{ g.target.label }}" list="group-{{ loop.index }}" required></span>
+      <datalist id="group-{{ loop.index }}"><option value="{{ g.target.label }}">{% for s in g.suggestions %}<option value="{{ s.alias.label }}">{% endfor %}</datalist>
+      <span class="buttons">
+        <button class="wa-brand">Merge…</button>
+        <button class="wa-outlined" formmethod="post" formaction="/names/distinct" formnovalidate>Not the same</button>
+        <button class="wa-outlined" formmethod="post" formaction="/names/ignore" formnovalidate>Ignore</button>
+      </span>
+    </div>
   </form>
-  {% endfor %}
-</section>
+</wa-details>
 {% else %}
-<p class="hint">None.</p>
+<p class="hint">No suggestions.</p>
 {% endfor %}
 </div>
-{% endmacro %}
-
-{{ suggestion_panel("likely", "Likely the same", likely,
-     "Names with the same words once prep words and plurals are set aside, or spelled almost like an item.") }}
-{{ suggestion_panel("contains", "Contains another name", contains,
-     "Names that contain a shorter one (“banana shallot” contains “shallot”). Often a different thing (“garlic powder”): mark those Not the same.") }}
 
 <div class="panel" id="compounds">
 <h2>Compounds and choices {{ odd|length }}</h2>
-<p class="hint">Compounds (“salt and pepper”) are two things in one ingredient, and choices (“walnuts or chocolate chips”) are either one. Neither is suggested. Map one to a single item if that's what you buy, or ignore it.</p>
-{% for r, kind in odd %}
-<form method="post" action="/names/map" class="inline">
-  <input type="hidden" name="key" value="{{ r.key }}">
-  <span><wa-badge variant="neutral" appearance="outlined">{{ kind }}</wa-badge> <strong>{{ r.label }}</strong>
-    <span class="hint">{{ where(r.key, 'used %d×' % (r.line_count + r.recipe_count)) }}</span></span>
-  <input name="target_name" list="item-names" placeholder="item to map into">
-  {{ map_fields('', '') }}
-  <button class="wa-brand">Map</button>
-  <button class="wa-outlined" formaction="/names/ignore">Ignore</button>
+<p class="hint">Compounds (“salt and pepper”) are two things in one ingredient, and choices (“walnuts or chocolate chips”) are either one. Neither is suggested. Open one to map it to a single item, or ignore it.</p>
+{% if odd %}
+<form method="post" action="/names/ignore">
+  <ul class="checklist">
+  {% for r, kind in odd %}
+    <li><label><input type="checkbox" name="keys" value="{{ r.key }}"> <wa-badge variant="neutral" appearance="outlined">{{ kind }}</wa-badge></label>
+      {{ name_link(r.key, r.label) }} <span class="hint">{{ where(r.key, 'used %d×' % (r.line_count + r.recipe_count)) }}</span></li>
+  {% endfor %}
+  </ul>
+  <button class="wa-outlined">Ignore checked</button>
 </form>
-{% endfor %}
-</div>
-
-<div class="panel" id="search">
-<h2>All names</h2>
-<form method="get" action="/names#search" class="inline">
-  <input name="q" value="{{ q }}" placeholder="Find a name in AnyList">
-  <button class="wa-outlined">Search</button>
-</form>
-{% for r in found %}
-<form method="post" action="/names/map" class="inline">
-  <input type="hidden" name="key" value="{{ r.key }}">
-  <span><strong>{{ r.label }}</strong> <span class="hint">{{ where(r.key, '%d lines · %d recipe ingredients' % (r.line_count, r.recipe_count)) }}{% if r.ignored %} · ignored{% endif %}
-    {% if r.item_id %} · in <a href="/items/{{ r.item_id }}">{{ r.item_name }}</a>{% endif %}</span></span>
-  <input name="target_name" list="item-names" placeholder="item to map into" required>
-  {{ map_fields('', '') }}
-  <button class="wa-brand">Map</button>
-</form>
-{% endfor %}
-{% if q and not found %}<p class="hint">No names match “{{ q }}”.</p>{% endif %}
+{% endif %}
 </div>
 
 <div class="panel" id="log">

@@ -210,10 +210,29 @@ def test_split_off_stops_rewrites(conn):
     fake = FakeList()
     fake.add("a", "garlic cloves", checked=True)
     assert planned(conn, fake)
-    split_off(conn, garlic, "garlic cloves")
+    split_off(conn, "garlic cloves")
     assert planned(conn, fake) == []
-    split_off(conn, garlic, "garlic")  # its own name stays
+    split_off(conn, "garlic")  # its own name stays
     assert item(conn, "garlic") == garlic
+
+
+def test_moving_an_alias_doesnt_merge_its_old_item(conn):
+    garlic, roasted = item(conn, "Garlic"), item(conn, "Roasted Garlic")
+    map_name(conn, "garlic cloves", garlic)
+    map_name(conn, "garlic cloves", roasted)
+    assert item(conn, "Garlic") == garlic  # still its own item
+    assert item(conn, "garlic cloves") == roasted
+
+
+def test_target_item_refuses_another_items_alias(conn):
+    from groceries.sync import NotAnItemName, target_item
+
+    garlic = item(conn, "Garlic")
+    map_name(conn, "garlic cloves", garlic)
+    assert target_item(conn, "garlic") == garlic
+    with pytest.raises(NotAnItemName):
+        target_item(conn, "Garlic Cloves")
+    assert target_item(conn, "Roasted Garlic") not in (garlic, None)
 
 
 def test_mapping_an_items_name_merges_that_item(conn):

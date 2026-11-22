@@ -87,11 +87,12 @@ def map_name(
     conn: sqlite3.Connection, key: str, target: int, unit: str = "", style: str = ""
 ) -> None:
     """Make the AnyList name `key` an alias of `target`, and `target` canonical. If the
-    name already belongs to another item, that item is merged into `target`."""
+    name is another item's own name, that item is merged into `target`; if it's only
+    another item's alias, just the alias moves."""
     row = conn.execute(
         "SELECT item_id FROM external_ref WHERE source = 'anylist' AND external_id = ?", (key,)
     ).fetchone()
-    if row is not None and row["item_id"] != target:
+    if row is not None and row["item_id"] != target and is_own_name(conn, key):
         merge_items(conn, row["item_id"], target)
     conn.execute(
         """
@@ -105,14 +106,41 @@ def map_name(
     make_canonical(conn, target)
 
 
-def split_off(conn: sqlite3.Connection, item_id: int, key: str) -> None:
-    """Stop an alias mapping to its item. The item's own name can't be split off."""
-    (name,) = conn.execute("SELECT name FROM item WHERE id = ?", (item_id,)).fetchone()
-    if key != normalize(name):
+def split_off(conn: sqlite3.Connection, key: str) -> None:
+    """Stop an AnyList name mapping to its item, so its rewrites are dropped. An item's own
+    name can't be split off: stop rewriting the item instead."""
+    if not is_own_name(conn, key):
         conn.execute(
-            "DELETE FROM external_ref WHERE source = 'anylist' AND external_id = ? AND item_id = ?",
-            (key, item_id),
+            "DELETE FROM external_ref WHERE source = 'anylist' AND external_id = ?", (key,)
         )
+
+
+def is_own_name(conn: sqlite3.Connection, key: str) -> bool:
+    row = conn.execute(
+        "SELECT i.name FROM external_ref r JOIN item i ON i.id = r.item_id "
+        "WHERE r.source = 'anylist' AND r.external_id = ?",
+        (key,),
+    ).fetchone()
+    return row is not None and normalize(row["name"]) == key
+
+
+class NotAnItemName(Exception):
+    """A name chosen for an item is already another item's alias."""
+
+
+def target_item(conn: sqlite3.Connection, name: str) -> int:
+    """The item to merge names into, called `name`: an item whose own name it is, or a new
+    item. It can't be another item's alias, because that would merge into the other item
+    under a different name than the one chosen."""
+    name = name.strip()
+    row = conn.execute(
+        "SELECT i.id, i.name FROM external_ref r JOIN item i ON i.id = r.item_id "
+        "WHERE r.source = 'anylist' AND r.external_id = ?",
+        (normalize(name),),
+    ).fetchone()
+    if row is not None and normalize(row["name"]) != normalize(name):
+        raise NotAnItemName(f"“{name}” is already a name of the item “{row['name']}”.")
+    return row["id"] if row is not None else item_for_name(conn, name)
 
 
 def merge_items(conn: sqlite3.Connection, source: int, target: int) -> None:
