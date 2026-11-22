@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+
+{% macro product_links(store, line, products) %}
+  {% if products|length > 1 %}
+    <span class="hint">pick one:</span>
+    {% for p in products %}{% if not loop.first %} <span class="hint">or</span> {% endif %}<a href="{{ p.url }}" target="_blank" rel="noopener">{{ p.label }}</a>{% endfor %}
+  {% elif products %}
+    <a href="{{ products[0].url }}" target="_blank" rel="noopener">{{ products[0].label }}</a>
+  {% else %}
+    {% set link = search_link(store, line.name) %}
+    {% if link %}<a href="{{ link }}" target="_blank" rel="noopener">Search {{ store.name }}</a>{% endif %}
+    <a href="/items/{{ line.item_id }}">add product</a>
+  {% endif %}
+{% endmacro %}
+
+{% block content %}
+<div class="bar">
+  <h1>Shopping list</h1>
+  <form method="post" action="/sync"><button class="small secondary">Sync now</button></form>
+</div>
+
+{% if view.unassigned %}
+<section class="burndown">
+  <h2>No store yet ({{ view.unassigned|length }})</h2>
+  <p class="hint">Pick where each comes from. It's saved on the item and in AnyList.</p>
+  <table><tbody>
+  {% for lv in view.unassigned %}
+    {% set l = lv.row %}
+    <tr>
+      <td><a href="/items/{{ l.item_id }}">{{ l.name }}</a>{% if l.quantity %} <span class="qty">× {{ l.quantity }}</span>{% endif %}</td>
+      <td>
+        <form method="post" action="/lines/{{ l.anylist_item_id }}/store" class="inline">
+          <select name="store">{% for s in all_stores %}<option>{{ s.name }}</option>{% endfor %}</select>
+          <button class="small">Set</button>
+        </form>
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody></table>
+</section>
+{% endif %}
+
+{% for g in view.stores %}
+<section>
+  <div class="bar">
+    <h2>{{ g.store.name }} ({{ g.lines|length }})</h2>
+    {% if g.lines %}
+    <form method="post" action="/stores/{{ g.store.id }}/ordered">
+      {% for lv in g.lines %}<input type="hidden" name="ids" value="{{ lv.row.anylist_item_id }}">{% endfor %}
+      <button class="small secondary">Mark all ordered</button>
+    </form>
+    {% endif %}
+  </div>
+  {% if g.lines %}
+  <form method="post" action="/stores/{{ g.store.id }}/ordered" id="ordered-{{ g.store.id }}"></form>
+  <table><tbody>
+  {% for lv in g.lines %}
+    {% set l = lv.row %}
+    <tr>
+      <td><input type="checkbox" name="ids" value="{{ l.anylist_item_id }}" form="ordered-{{ g.store.id }}"></td>
+      <td>
+        <a href="/items/{{ l.item_id }}" class="name">{{ l.name }}</a>{% if l.quantity %} <span class="qty">× {{ l.quantity }}</span>{% endif %}
+        <div class="links">{{ product_links(g.store, l, lv.products) }}</div>
+        {% for s, products in lv.also %}
+        <details class="also">
+          <summary>also at {{ s.name }}</summary>
+          <div class="links">{{ product_links(s, l, products) }}</div>
+          <form method="post" action="/stores/{{ s.id }}/ordered">
+            <input type="hidden" name="ids" value="{{ l.anylist_item_id }}">
+            <button class="small secondary">Ordered from {{ s.name }}</button>
+          </form>
+        </details>
+        {% endfor %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody></table>
+  <button class="small" form="ordered-{{ g.store.id }}">Mark ticked as ordered</button>
+  {% else %}
+  <p class="hint">Nothing to order.</p>
+  {% endif %}
+</section>
+{% endfor %}
+
+{% if view.in_person %}
+<section>
+  <h2>In person ({{ view.in_person|length }})</h2>
+  <table><tbody>
+  {% for l, store in view.in_person %}
+    <tr>
+      <td><a href="/items/{{ l.item_id }}">{{ l.name }}</a>{% if l.quantity %} <span class="qty">× {{ l.quantity }}</span>{% endif %}</td>
+      <td class="hint">{{ store }}</td>
+    </tr>
+  {% endfor %}
+  </tbody></table>
+</section>
+{% endif %}
+
+<details class="section"{% if not view.on_the_way %} hidden{% endif %}>
+  <summary><h2>On the way ({{ view.on_the_way.values()|map('length')|sum }})</h2></summary>
+  <p class="hint">Check items off in AnyList when they arrive. They drop off here on the next sync.</p>
+  {% for store, lines in view.on_the_way.items() %}
+  <h3>{{ store }}</h3>
+  <table><tbody>
+  {% for l in lines %}
+    <tr>
+      <td>{{ l.name }}{% if l.quantity %} × {{ l.quantity }}{% endif %}</td>
+      <td>
+        <form method="post" action="/lines/not-received">
+          <input type="hidden" name="ids" value="{{ l.anylist_item_id }}">
+          <button class="small secondary">Didn't arrive</button>
+        </form>
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody></table>
+  {% endfor %}
+</details>
+
+{% if svc.last_sync %}
+<p class="hint">Last sync: {{ svc.last_sync.lines }} open lines.</p>
+{% endif %}
+{% endblock %}

@@ -1,5 +1,4 @@
 import asyncio
-import json
 import sqlite3
 
 import pytest
@@ -9,6 +8,7 @@ from groceries.sync import (
     item_stores,
     mark_not_received,
     mark_ordered,
+    merge_items,
     push_item_stores,
     set_item_stores,
     sync,
@@ -56,13 +56,18 @@ def line(conn, line_id):
     return conn.execute("SELECT * FROM list_line WHERE anylist_item_id = ?", (line_id,)).fetchone()
 
 
-def test_unmatched_lines_are_mirrored_untouched(conn):
+def test_every_name_gets_an_item_that_takes_the_line_stores(conn):
     fake = FakeList()
-    fake.add("a", "kimchi", "H-Mart", quantity="2")
+    fake.add("a", "Kimchi", "H-Mart", quantity="2")
     fake.add("b", "mystery")
+    fake.add("c", "  kimchi ")
     run(sync(conn, fake))
-    assert fake.writes == []
-    assert json.loads(line(conn, "a")["stores"]) == ["H-Mart"]
+    assert fake.writes == [{"c": frozenset({"H-Mart"})}]  # same item, so same stores
+    kimchi = line(conn, "a")["item_id"]
+    assert line(conn, "c")["item_id"] == kimchi
+    assert conn.execute("SELECT name FROM item WHERE id = ?", (kimchi,)).fetchone()[0] == "Kimchi"
+    assert item_stores(conn, kimchi) == {"H-Mart"}
+    assert item_stores(conn, line(conn, "b")["item_id"]) == set()
     assert line(conn, "a")["quantity"] == "2"
     kind = conn.execute("SELECT kind FROM store WHERE name = 'H-Mart'").fetchone()[0]
     assert kind == "offline"
@@ -156,13 +161,47 @@ def test_failed_write_is_retried_not_adopted(conn):
     assert item_stores(conn, item_id) == {"King Soopers"}
 
 
-def test_newly_linked_line_is_treated_as_new(conn):
+def link(conn, item_id, store, url, priority=0):
+    product_id = conn.execute(
+        "INSERT INTO product (store_id, label, url) VALUES (?, ?, ?) "
+        "ON CONFLICT (store_id, url) DO UPDATE SET url = excluded.url RETURNING id",
+        (store_id(conn, store), url, url),
+    ).fetchone()[0]
+    conn.execute(
+        "INSERT INTO item_product (item_id, product_id, priority) VALUES (?, ?, ?)",
+        (item_id, product_id, priority),
+    )
+    return product_id
+
+
+def test_merge_moves_names_products_and_stores(conn):
+    onion = make_item(conn, "Onion", "King Soopers")
+    shared = link(conn, onion, "King Soopers", "u/yellow")
     fake = FakeList()
-    fake.add("a", "yellow onions")
+    fake.add("a", "yellow onions", "Natural Grocers")
     run(sync(conn, fake))
-    make_item(conn, "Onion", "King Soopers", aliases=["yellow onions"])
-    run(sync(conn, fake))
-    assert fake.stores_of("a") == {"King Soopers"}
+    typo = line(conn, "a")["item_id"]
+    link(conn, typo, "King Soopers", "u/yellow")  # same product on both
+    link(conn, typo, "Natural Grocers", "u/ng")
+
+    merge_items(conn, typo, onion)
+    assert conn.execute("SELECT 1 FROM item WHERE id = ?", (typo,)).fetchone() is None
+    names = {
+        r[0]
+        for r in conn.execute("SELECT external_id FROM external_ref WHERE item_id = ?", (onion,))
+    }
+    assert names == {"onion", "yellow onions"}
+    products = {
+        r[0]
+        for r in conn.execute("SELECT product_id FROM item_product WHERE item_id = ?", (onion,))
+    }
+    assert len(products) == 2 and shared in products
+    assert item_stores(conn, onion) == {"King Soopers", "Natural Grocers"}
+    assert preferred(conn, onion) == "King Soopers"
+
+    run(sync(conn, fake))  # the line now belongs to Onion and gets the combined set
+    assert line(conn, "a")["item_id"] == onion
+    assert fake.stores_of("a") == {"King Soopers", "Natural Grocers"}
 
 
 def test_ordered_lines_are_left_alone(conn):
@@ -219,7 +258,12 @@ def test_migration_from_v1_keeps_settings_rules_and_ordered_lines(tmp_path):
     assert conn.execute("PRAGMA user_version").fetchone()[0] == len(db.MIGRATIONS)
     assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
     assert conn.execute("SELECT value FROM kv").fetchone()[0] == "{}"
-    assert conn.execute("SELECT count(*) FROM product").fetchone()[0] == 1
+    products = conn.execute("SELECT store_id, label, url FROM product").fetchall()
+    assert [tuple(r) for r in products] == [(1, "M", "u")]
+    links = conn.execute("SELECT item_id, priority, enabled FROM item_product").fetchall()
+    assert [tuple(r) for r in links] == [(1, 0, 1)]
+    search = conn.execute("SELECT search_url FROM store WHERE name = 'Total Beverage'")
+    assert search.fetchone()[0] == "https://totalbev.com/shop/?ch-query={}"
     assert conn.execute("SELECT hand_pick FROM item").fetchone()[0] == 1
     assert item_stores(conn, 1) == {"King Soopers", "Natural Grocers"}
     assert preferred(conn, 1) == "Natural Grocers"

@@ -11,6 +11,9 @@ change wins. AnyList keeps no modification times, so "latest" comes from orderin
     yet takes the line's.
 Lines that have been ordered are left alone. Which store a line was ordered from lives
 only here, and the line drops out when someone checks it off in AnyList.
+
+Every AnyList name gets an item the first time it is seen. Names that mean the same
+thing ("Avocado", "Avocados") are combined afterwards with `merge_items`.
 """
 
 import json
@@ -30,12 +33,54 @@ class SyncReport:
     written: int = 0  # lines whose stores were written to AnyList
 
 
-def _match(conn: sqlite3.Connection, name: str) -> int | None:
+def _item_for(conn: sqlite3.Connection, name: str) -> int:
+    """The item an AnyList name maps to, creating it on first sight."""
+    key = normalize(name)
     row = conn.execute(
-        "SELECT item_id FROM external_ref WHERE source = 'anylist' AND external_id = ?",
-        (normalize(name),),
+        "SELECT item_id FROM external_ref WHERE source = 'anylist' AND external_id = ?", (key,)
     ).fetchone()
-    return row["item_id"] if row else None
+    if row:
+        return row["item_id"]
+    label = name.strip()
+    existing = conn.execute("SELECT id FROM item WHERE name = ?", (label,)).fetchone()
+    item_id = (
+        existing["id"]
+        if existing
+        else conn.execute("INSERT INTO item (name) VALUES (?)", (label,)).lastrowid
+    )
+    conn.execute("INSERT INTO external_ref VALUES ('anylist', ?, ?)", (key, item_id))
+    return item_id
+
+
+def merge_items(conn: sqlite3.Connection, source: int, target: int) -> None:
+    """Fold `source` into `target`: its AnyList names, products and stores move over,
+    and `target` keeps its own name, preferred store and hand-pick flag."""
+    if source == target:
+        return
+    conn.execute("BEGIN")
+    try:
+        conn.execute("UPDATE external_ref SET item_id = ? WHERE item_id = ?", (target, source))
+        conn.execute(
+            "INSERT OR IGNORE INTO item_product (item_id, product_id, priority, enabled) "
+            "SELECT ?, product_id, priority, enabled FROM item_product WHERE item_id = ?",
+            (target, source),
+        )
+        has_preferred = conn.execute(
+            "SELECT 1 FROM item_store WHERE item_id = ? AND preferred", (target,)
+        ).fetchone()
+        conn.execute(
+            "INSERT OR IGNORE INTO item_store (item_id, store_id, preferred) "
+            "SELECT ?, store_id, preferred AND ? FROM item_store WHERE item_id = ?",
+            (target, has_preferred is None, source),
+        )
+        # The source's lines are re-linked by the next sync, which treats them as newly
+        # matched, so they pick up the combined store set.
+        conn.execute("DELETE FROM item WHERE id = ?", (source,))
+        conn.execute("COMMIT")
+    except BaseException:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
 
 
 def item_stores(conn: sqlite3.Connection, item_id: int) -> frozenset[str]:
@@ -102,7 +147,7 @@ async def sync(conn: sqlite3.Connection, backend: ListBackend) -> SyncReport:
             prev = conn.execute(
                 "SELECT * FROM list_line WHERE anylist_item_id = ?", (line.id,)
             ).fetchone()
-            item_id = _match(conn, line.name)
+            item_id = _item_for(conn, line.name)
             target = _reconcile(conn, prev, item_id, line.stores, report)
             if target != line.stores:
                 writes[line.id] = target
@@ -129,9 +174,9 @@ async def sync(conn: sqlite3.Connection, backend: ListBackend) -> SyncReport:
     return report
 
 
-def _reconcile(conn, prev, item_id, anylist: frozenset[str], report) -> frozenset[str]:
+def _reconcile(conn, prev, item_id: int, anylist: frozenset[str], report) -> frozenset[str]:
     """Decide a line's stores, updating the item's set if AnyList wins."""
-    if item_id is None or (prev is not None and prev["ordered_from"] is not None):
+    if prev is not None and prev["ordered_from"] is not None:
         return anylist
     mine = item_stores(conn, item_id)
     if prev is None or prev["item_id"] != item_id:  # a new line, or newly matched

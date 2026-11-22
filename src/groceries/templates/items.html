@@ -2,10 +2,7 @@
 {% block title %}Items{% endblock %}
 {% block content %}
 <h1>Items</h1>
-<form method="post" action="/items" class="inline">
-  <input name="name" placeholder="New item name" required>
-  <button>Add item</button>
-</form>
+<p class="hint">Every name seen on the AnyList list becomes an item. Merge items that are the same thing from the item's page.</p>
 <table>
   <thead><tr><th>Item</th><th>AnyList names</th><th>Stores</th><th>Products</th></tr></thead>
   <tbody>
@@ -21,7 +18,7 @@
       <td>{{ i.products }}</td>
     </tr>
   {% else %}
-    <tr><td colspan="4">No items yet. Use "add a product" on a store page to make one.</td></tr>
+    <tr><td colspan="4">No items yet. They appear after the first sync with AnyList.</td></tr>
   {% endfor %}
   </tbody>
 </table>

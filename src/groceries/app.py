@@ -1,4 +1,4 @@
-"""Web UI: per-store order pages, the on-the-way list and item/product editing.
+"""Web UI: the shopping list grouped by store, plus item and product editing.
 
 Server-rendered forms with POST-redirect-GET, no client-side JS. A background loop syncs
 AnyList periodically. Store changes made here are written to AnyList straight away.
@@ -8,6 +8,7 @@ import asyncio
 import json
 import logging
 import os
+import sqlite3
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -21,7 +22,6 @@ from fastapi.templating import Jinja2Templates
 
 from . import anylist, db, sync
 from .kroger import Kroger, Location
-from .normalize import normalize
 
 log = logging.getLogger(__name__)
 HERE = Path(__file__).parent
@@ -69,6 +69,11 @@ class Services:
                 log.exception("writing stores to AnyList failed")
                 self.last_error = f"{type(e).__name__}: {e}"
 
+    async def merge_items(self, source: int, target: int) -> None:
+        async with self.lock:
+            sync.merge_items(self.conn, source, target)
+            await self._sync_locked()
+
 
 async def _sync_loop(svc: Services, interval: float) -> None:
     while True:
@@ -111,49 +116,96 @@ def kroger_location(conn) -> Location | None:
     return Location(**json.loads(row["value"])) if row else None
 
 
+def item_products(conn, item_id: int | None, store_id: int, enabled_only: bool = True) -> list:
+    """An item's products at a store, best first."""
+    if item_id is None:
+        return []
+    return conn.execute(
+        f"""
+        SELECT p.*, ip.priority, ip.enabled,
+          (SELECT group_concat(i.name, ', ') FROM item_product o JOIN item i ON i.id = o.item_id
+             WHERE o.product_id = p.id AND o.item_id != ip.item_id) AS also_used_by
+        FROM item_product ip JOIN product p ON p.id = ip.product_id
+        WHERE ip.item_id = ? AND p.store_id = ? {"AND ip.enabled" if enabled_only else ""}
+        ORDER BY ip.priority, p.id
+        """,
+        (item_id, store_id),
+    ).fetchall()
+
+
 @dataclass
-class StoreLines:
-    to_order: list = field(default_factory=list)  # this is the line's preferred store
-    also: list = field(default_factory=list)  # preferred elsewhere, can come from here
-    in_person: list = field(default_factory=list)  # hand-pick items preferred here
+class LineView:
+    row: sqlite3.Row
+    products: list = field(default_factory=list)  # at the store it's listed under
+    also: list = field(default_factory=list)  # (store, products) for its other online stores
 
 
-def lines_by_store(conn) -> tuple[dict[int, StoreLines], int]:
-    """Place every open, unordered line on the store pages. Returns the placements and
-    how many lines have no store at all.
+@dataclass
+class StoreGroup:
+    store: sqlite3.Row
+    lines: list[LineView] = field(default_factory=list)
 
-    A line's preferred store is its item's, if that is one of the line's AnyList stores,
-    else the first of them in store order.
+
+@dataclass
+class ListView:
+    unassigned: list[LineView] = field(default_factory=list)
+    stores: list[StoreGroup] = field(default_factory=list)
+    in_person: list[tuple[sqlite3.Row, str]] = field(default_factory=list)  # (line, store)
+    on_the_way: dict[str, list] = field(default_factory=dict)  # store name -> lines
+
+
+def build_list(conn) -> ListView:
+    """Place every open line once.
+
+    A line goes under its preferred store: the item's, if that is one of the line's
+    AnyList stores, else the first of them in store order. Hand-pick items, and lines
+    whose preferred store isn't one we order from online, go under "In person".
     """
     stores = conn.execute("SELECT * FROM store ORDER BY sort").fetchall()
-    by_store = {s["id"]: StoreLines() for s in stores if s["kind"] != "offline"}
-    unassigned = 0
+    view = ListView(stores=[StoreGroup(s) for s in stores if s["kind"] != "offline"])
+    groups = {g.store["id"]: g for g in view.stores}
     rows = conn.execute(
         """
-        SELECT l.*, coalesce(i.hand_pick, 0) AS hand_pick,
+        SELECT l.*, coalesce(i.hand_pick, 0) AS hand_pick, s.name AS ordered_from_name,
           (SELECT x.store_id FROM item_store x WHERE x.item_id = l.item_id AND x.preferred)
             AS preferred_id
-        FROM list_line l LEFT JOIN item i ON i.id = l.item_id
-        WHERE l.ordered_from IS NULL
+        FROM list_line l
+        LEFT JOIN item i ON i.id = l.item_id
+        LEFT JOIN store s ON s.id = l.ordered_from
         ORDER BY l.name COLLATE NOCASE
         """
     ).fetchall()
     for row in rows:
+        if row["ordered_from"] is not None:
+            view.on_the_way.setdefault(row["ordered_from_name"], []).append(row)
+            continue
         names = set(json.loads(row["stores"]))
         at = [s for s in stores if s["name"] in names]
         if not at:
-            unassigned += 1
+            view.unassigned.append(LineView(row))
             continue
-        preferred = next((s["id"] for s in at if s["id"] == row["preferred_id"]), at[0]["id"])
-        for s in at:
-            bucket = by_store.get(s["id"])
-            if bucket is None:
-                continue
-            if s["id"] == preferred:
-                (bucket.in_person if row["hand_pick"] else bucket.to_order).append(row)
-            elif not row["hand_pick"]:
-                bucket.also.append(row)
-    return by_store, unassigned
+        primary = next((s for s in at if s["id"] == row["preferred_id"]), at[0])
+        if row["hand_pick"] or primary["id"] not in groups:
+            view.in_person.append((row, primary["name"]))
+            continue
+        groups[primary["id"]].lines.append(
+            LineView(
+                row,
+                products=item_products(conn, row["item_id"], primary["id"]),
+                also=[
+                    (s, item_products(conn, row["item_id"], s["id"]))
+                    for s in at
+                    if s["id"] in groups and s["id"] != primary["id"]
+                ],
+            )
+        )
+    view.in_person.sort(key=lambda pair: (pair[1], pair[0]["name"].casefold()))
+    return view
+
+
+def search_link(store, term: str) -> str | None:
+    template = store["search_url"]
+    return template.replace("{}", quote_plus(term)) if template else None
 
 
 def _svc(request: Request) -> Services:
@@ -165,11 +217,7 @@ def _back(request: Request, fallback: str = "/") -> RedirectResponse:
 
 
 def _render(request: Request, template: str, **ctx):
-    svc = _svc(request)
-    stores = svc.conn.execute(
-        "SELECT * FROM store WHERE kind != 'offline' ORDER BY sort"
-    ).fetchall()
-    return templates.TemplateResponse(request, template, {"nav_stores": stores, "svc": svc, **ctx})
+    return templates.TemplateResponse(request, template, {"svc": _svc(request), **ctx})
 
 
 def _routes(app: FastAPI) -> None:
@@ -178,102 +226,36 @@ def _routes(app: FastAPI) -> None:
         return {"ok": True}
 
     @app.get("/")
-    async def overview(request: Request):
+    async def shopping_list(request: Request):
         conn = _svc(request).conn
-        by_store, unassigned = lines_by_store(conn)
-        stores = conn.execute(
-            """
-            SELECT s.*, (SELECT count(*) FROM list_line l WHERE l.ordered_from = s.id)
-              AS on_the_way
-            FROM store s WHERE s.kind != 'offline' ORDER BY s.sort
-            """
-        ).fetchall()
-        return _render(
-            request, "overview.html", stores=stores, by_store=by_store, unassigned=unassigned
-        )
+        stores = conn.execute("SELECT name FROM store ORDER BY kind = 'offline', sort").fetchall()
+        return _render(request, "list.html", view=build_list(conn), all_stores=stores)
 
     @app.post("/sync")
     async def sync_now(request: Request):
         await _svc(request).sync()
         return _back(request)
 
-    @app.get("/stores/{store_id}")
-    async def store_page(request: Request, store_id: int):
-        conn = _svc(request).conn
-        store = conn.execute(
-            "SELECT * FROM store WHERE id = ? AND kind != 'offline'", (store_id,)
-        ).fetchone()
-        if store is None:
-            raise HTTPException(404)
-        lines = lines_by_store(conn)[0][store_id]
-        products = {}
-        for line in lines.to_order + lines.also:
-            if line["item_id"] is not None:
-                products[line["anylist_item_id"]] = conn.execute(
-                    "SELECT * FROM product WHERE item_id = ? AND store_id = ? AND enabled "
-                    "ORDER BY priority, id",
-                    (line["item_id"], store_id),
-                ).fetchall()
-        return _render(
-            request,
-            "store.html",
-            store=store,
-            lines=lines,
-            products=products,
-            search_url=_search_url(store),
-        )
-
     @app.post("/stores/{store_id}/ordered")
     async def lines_ordered(request: Request, store_id: int, ids: Annotated[list[str], Form()]):
         sync.mark_ordered(_svc(request).conn, store_id, ids)
         return _back(request)
-
-    @app.get("/on-the-way")
-    async def on_the_way(request: Request):
-        conn = _svc(request).conn
-        rows = conn.execute(
-            """
-            SELECT l.*, s.name AS store_name FROM list_line l
-            JOIN store s ON s.id = l.ordered_from
-            ORDER BY s.sort, l.name COLLATE NOCASE
-            """
-        ).fetchall()
-        groups: dict[str, list] = {}
-        for r in rows:
-            groups.setdefault(r["store_name"], []).append(r)
-        return _render(request, "on_the_way.html", groups=groups)
 
     @app.post("/lines/not-received")
     async def lines_not_received(request: Request, ids: Annotated[list[str], Form()]):
         sync.mark_not_received(_svc(request).conn, ids)
         return _back(request)
 
-    @app.get("/match")
-    async def match(request: Request, name: str):
-        conn = _svc(request).conn
-        items = conn.execute("SELECT id, name FROM item ORDER BY name COLLATE NOCASE").fetchall()
-        return _render(request, "match.html", name=name, items=items)
-
-    @app.post("/aliases")
-    async def add_alias(
-        request: Request, item_id: Annotated[int, Form()], alias: Annotated[str, Form()]
-    ):
+    @app.post("/lines/{line_id}/store")
+    async def set_line_store(request: Request, line_id: str, store: Annotated[str, Form()]):
+        """Give an unassigned line's item a store. The line gets it in AnyList too."""
         svc = _svc(request)
-        svc.conn.execute(
-            "INSERT INTO external_ref (source, external_id, item_id) VALUES ('anylist', ?, ?) "
-            "ON CONFLICT DO UPDATE SET item_id = excluded.item_id",
-            (normalize(alias), item_id),
-        )
-        await svc.sync()
-        return RedirectResponse(f"/items/{item_id}", status_code=303)
-
-    @app.post("/aliases/delete")
-    async def delete_alias(request: Request, alias: Annotated[str, Form()]):
-        svc = _svc(request)
-        svc.conn.execute(
-            "DELETE FROM external_ref WHERE source = 'anylist' AND external_id = ?", (alias,)
-        )
-        await svc.sync()
+        row = svc.conn.execute(
+            "SELECT item_id FROM list_line WHERE anylist_item_id = ?", (line_id,)
+        ).fetchone()
+        if row is None or row["item_id"] is None:
+            raise HTTPException(404)
+        await svc.set_item_stores(row["item_id"], {store}, store)
         return _back(request)
 
     @app.get("/items")
@@ -287,30 +269,11 @@ def _routes(app: FastAPI) -> None:
               (SELECT s.name FROM item_store x JOIN store s ON s.id = x.store_id
                  WHERE x.item_id = i.id AND x.preferred) AS preferred,
               (SELECT count(*) - 1 FROM item_store x WHERE x.item_id = i.id) AS others,
-              (SELECT count(*) FROM product p WHERE p.item_id = i.id) AS products
+              (SELECT count(*) FROM item_product p WHERE p.item_id = i.id) AS products
             FROM item i ORDER BY i.name COLLATE NOCASE
             """
         ).fetchall()
         return _render(request, "items.html", items=rows)
-
-    @app.post("/items")
-    async def create_item(request: Request, name: Annotated[str, Form()]):
-        svc = _svc(request)
-        conn = svc.conn
-        name = name.strip()
-        existing = conn.execute("SELECT id FROM item WHERE name = ?", (name,)).fetchone()
-        item_id = (
-            existing["id"]
-            if existing
-            else conn.execute("INSERT INTO item (name) VALUES (?)", (name,)).lastrowid
-        )
-        conn.execute(
-            "INSERT OR IGNORE INTO external_ref (source, external_id, item_id) "
-            "VALUES ('anylist', ?, ?)",
-            (normalize(name), item_id),
-        )
-        await svc.sync()
-        return RedirectResponse(f"/items/{item_id}", status_code=303)
 
     @app.get("/items/{item_id}")
     async def item_page(request: Request, item_id: int, q: str | None = None):
@@ -332,19 +295,47 @@ def _routes(app: FastAPI) -> None:
             "ORDER BY external_id",
             (item_id,),
         ).fetchall()
-        products: dict[int, list] = {s["id"]: [] for s in stores}
-        for p in conn.execute(
-            "SELECT * FROM product WHERE item_id = ? ORDER BY priority, id", (item_id,)
-        ):
-            products[p["store_id"]].append(p)
+        products = {s["id"]: item_products(conn, item_id, s["id"], False) for s in stores}
+        reusable = {
+            s["id"]: conn.execute(
+                """
+                SELECT p.*, (SELECT group_concat(i.name, ', ') FROM item_product o
+                               JOIN item i ON i.id = o.item_id WHERE o.product_id = p.id)
+                  AS used_by
+                FROM product p WHERE p.store_id = ? AND p.id NOT IN
+                  (SELECT product_id FROM item_product WHERE item_id = ?)
+                ORDER BY p.label COLLATE NOCASE
+                """,
+                (s["id"], item_id),
+            ).fetchall()
+            for s in stores
+        }
+        kroger_store = next((s for s in stores if s["kind"] == "kroger" and s["allowed"]), None)
         location = kroger_location(conn)
+        if q is None and kroger_store and not products[kroger_store["id"]]:
+            q = item["name"]  # nothing picked yet, so show matches straight away
         results, search_error = [], None
-        if q and svc.kroger and location:
+        if q and kroger_store and svc.kroger and location:
             try:
                 results = await svc.kroger.search(q, location.id)
             except Exception as e:
                 log.exception("kroger search failed")
                 search_error = f"{type(e).__name__}: {e}"
+        used_by = {}
+        if kroger_store:
+            for r in results:
+                row = conn.execute(
+                    """
+                    SELECT group_concat(i.name, ', ') FROM product p
+                    JOIN item_product o ON o.product_id = p.id JOIN item i ON i.id = o.item_id
+                    WHERE p.store_id = ? AND p.url = ?
+                    """,
+                    (kroger_store["id"], r.url),
+                ).fetchone()
+                used_by[r.url] = row[0]
+        others = conn.execute(
+            "SELECT id, name FROM item WHERE id != ? ORDER BY name COLLATE NOCASE", (item_id,)
+        ).fetchall()
         return _render(
             request,
             "item.html",
@@ -352,11 +343,14 @@ def _routes(app: FastAPI) -> None:
             stores=stores,
             aliases=aliases,
             products=products,
-            q=q if q is not None else item["name"],
+            reusable=reusable,
+            q=q or item["name"],
             results=results,
+            used_by=used_by,
             search_error=search_error,
             kroger_enabled=svc.kroger is not None,
             kroger_location=location,
+            others=others,
         )
 
     @app.post("/items/{item_id}")
@@ -385,10 +379,10 @@ def _routes(app: FastAPI) -> None:
         await _svc(request).set_item_stores(item_id, names, preferred or None)
         return RedirectResponse(f"/items/{item_id}", status_code=303)
 
-    @app.post("/items/{item_id}/delete")
-    async def delete_item(request: Request, item_id: int):
-        _svc(request).conn.execute("DELETE FROM item WHERE id = ?", (item_id,))
-        return RedirectResponse("/items", status_code=303)
+    @app.post("/items/{item_id}/merge")
+    async def merge_item(request: Request, item_id: int, source: Annotated[int, Form()]):
+        await _svc(request).merge_items(source, item_id)
+        return RedirectResponse(f"/items/{item_id}", status_code=303)
 
     @app.post("/items/{item_id}/products")
     async def add_product(
@@ -400,34 +394,48 @@ def _routes(app: FastAPI) -> None:
         upc: Annotated[str | None, Form()] = None,
     ):
         conn = _svc(request).conn
-        (priority,) = conn.execute(
-            "SELECT coalesce(max(priority) + 1, 0) FROM product WHERE item_id = ? AND store_id = ?",
-            (item_id, store_id),
-        ).fetchone()
         conn.execute(
-            "INSERT OR IGNORE INTO product (item_id, store_id, label, url, upc, priority) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (item_id, store_id, label.strip(), url.strip(), upc or None, priority),
+            "INSERT INTO product (store_id, label, url, upc) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT (store_id, url) DO NOTHING",
+            (store_id, label.strip(), url.strip(), upc or None),
         )
+        (product_id,) = conn.execute(
+            "SELECT id FROM product WHERE store_id = ? AND url = ?", (store_id, url.strip())
+        ).fetchone()
+        _link_product(conn, item_id, product_id)
         return RedirectResponse(f"/items/{item_id}", status_code=303)
 
-    @app.post("/products/{product_id}")
-    async def update_product(
+    @app.post("/items/{item_id}/link-product")
+    async def link_product(request: Request, item_id: int, product_id: Annotated[int, Form()]):
+        _link_product(_svc(request).conn, item_id, product_id)
+        return RedirectResponse(f"/items/{item_id}", status_code=303)
+
+    @app.post("/items/{item_id}/products/{product_id}")
+    async def update_item_product(
         request: Request,
+        item_id: int,
         product_id: int,
         priority: Annotated[int, Form()],
         enabled: Annotated[bool, Form()] = False,
     ):
         _svc(request).conn.execute(
-            "UPDATE product SET priority = ?, enabled = ? WHERE id = ?",
-            (priority, int(enabled), product_id),
+            "UPDATE item_product SET priority = ?, enabled = ? "
+            "WHERE item_id = ? AND product_id = ?",
+            (priority, int(enabled), item_id, product_id),
         )
-        return _back(request)
+        return RedirectResponse(f"/items/{item_id}", status_code=303)
 
-    @app.post("/products/{product_id}/delete")
-    async def delete_product(request: Request, product_id: int):
-        _svc(request).conn.execute("DELETE FROM product WHERE id = ?", (product_id,))
-        return _back(request)
+    @app.post("/items/{item_id}/products/{product_id}/unlink")
+    async def unlink_product(request: Request, item_id: int, product_id: int):
+        conn = _svc(request).conn
+        conn.execute(
+            "DELETE FROM item_product WHERE item_id = ? AND product_id = ?", (item_id, product_id)
+        )
+        conn.execute(
+            "DELETE FROM product WHERE id = ? AND id NOT IN (SELECT product_id FROM item_product)",
+            (product_id,),
+        )
+        return RedirectResponse(f"/items/{item_id}", status_code=303)
 
     @app.get("/settings")
     async def settings(request: Request, zip: str | None = None):
@@ -439,6 +447,9 @@ def _routes(app: FastAPI) -> None:
             except Exception as e:
                 log.exception("kroger location lookup failed")
                 error = f"{type(e).__name__}: {e}"
+        stores = svc.conn.execute(
+            "SELECT * FROM store WHERE kind != 'offline' ORDER BY sort"
+        ).fetchall()
         return _render(
             request,
             "settings.html",
@@ -447,6 +458,7 @@ def _routes(app: FastAPI) -> None:
             zip=zip or "",
             error=error,
             kroger_enabled=svc.kroger is not None,
+            stores=stores,
         )
 
     @app.post("/settings/kroger-location")
@@ -464,17 +476,30 @@ def _routes(app: FastAPI) -> None:
         )
         return RedirectResponse("/settings", status_code=303)
 
+    @app.post("/settings/search-links")
+    async def set_search_links(request: Request):
+        conn = _svc(request).conn
+        form = await request.form()
+        for key, value in form.items():
+            if key.startswith("search_url_"):
+                conn.execute(
+                    "UPDATE store SET search_url = ? WHERE id = ?",
+                    (str(value).strip() or None, int(key.removeprefix("search_url_"))),
+                )
+        return RedirectResponse("/settings", status_code=303)
 
-def _search_url(store) -> str | None:
-    """Template for a store-site search link, for lines with no saved product."""
-    if store["kind"] == "kroger":
-        return "https://www.kingsoopers.com/search?query={}"
-    return None
 
-
-def search_link(template: str | None, term: str) -> str | None:
-    return template.format(quote_plus(term)) if template else None
+def _link_product(conn, item_id: int, product_id: int) -> None:
+    """Add a product to an item, after the products it already has at that store."""
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO item_product (item_id, product_id, priority)
+        SELECT ?, ?, coalesce(max(ip.priority) + 1, 0)
+        FROM item_product ip JOIN product p ON p.id = ip.product_id
+        WHERE ip.item_id = ? AND p.store_id = (SELECT store_id FROM product WHERE id = ?)
+        """,
+        (item_id, product_id, item_id, product_id),
+    )
 
 
 templates.env.globals["search_link"] = search_link
-templates.env.filters["urlencode_plus"] = quote_plus

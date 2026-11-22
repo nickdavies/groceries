@@ -60,3 +60,13 @@ form.inline { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; mar
 .tag { font-size: 12px; padding: 1px 6px; border: 1px solid var(--line); border-radius: 4px; color: var(--muted); }
 .error { background: var(--error-bg); color: var(--error-fg); padding: 8px 12px; border-radius: 6px; }
 .results img { width: 48px; height: 48px; object-fit: contain; }
+.wide { width: 100%; }
+.bar { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; justify-content: space-between; }
+.bar h1, .bar h2 { margin: 16px 0 8px; }
+section { margin-bottom: 24px; }
+.burndown { border-left: 4px solid var(--accent); padding-left: 12px; }
+a.name { color: var(--fg); font-weight: 600; text-decoration: none; }
+details.also { margin-top: 4px; font-size: 14px; }
+details.also summary { color: var(--muted); cursor: pointer; }
+details.section summary { cursor: pointer; }
+details.section summary h2 { display: inline; }

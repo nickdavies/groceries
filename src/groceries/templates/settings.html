@@ -45,4 +45,21 @@
 {% else %}
 <p class="hint">Kroger API credentials aren't configured.</p>
 {% endif %}
+
+<h2>Store search links</h2>
+<p class="hint">Used for list items with no product yet. Put <code>{}</code> where the search words go. Leave blank for no link.</p>
+<form method="post" action="/settings/search-links">
+  <table>
+    <tbody>
+    {% for s in stores %}
+      <tr>
+        <td>{{ s.name }}</td>
+        <td><input name="search_url_{{ s.id }}" value="{{ s.search_url or '' }}" class="wide"
+                   placeholder="https://example.com/search?q={}"></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <button class="small">Save links</button>
+</form>
 {% endblock %}

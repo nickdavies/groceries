@@ -136,6 +136,44 @@ MIGRATIONS = [
         FROM list_entry;
     DROP TABLE list_entry;
     """,
+    """
+    -- Products stand alone so one product can serve several items (whole lemons for
+    -- both "lemon" and "lemon juice"). item_product carries each item's own choice
+    -- order and on/off for a product. An item with several enabled products at a store
+    -- is shown as alternatives: buy one of them.
+    CREATE TABLE product_v2 (
+        id INTEGER PRIMARY KEY,
+        store_id INTEGER NOT NULL REFERENCES store(id) ON DELETE CASCADE,
+        label TEXT NOT NULL,
+        url TEXT NOT NULL,
+        upc TEXT,
+        UNIQUE (store_id, url)
+    );
+    INSERT INTO product_v2 (id, store_id, label, url, upc)
+        SELECT min(id), store_id, label, url, upc FROM product GROUP BY store_id, url;
+    CREATE TABLE item_product (
+        item_id INTEGER NOT NULL REFERENCES item(id) ON DELETE CASCADE,
+        product_id INTEGER NOT NULL REFERENCES product(id) ON DELETE CASCADE,
+        priority INTEGER NOT NULL DEFAULT 0,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        PRIMARY KEY (item_id, product_id)
+    );
+    INSERT INTO item_product (item_id, product_id, priority, enabled)
+        SELECT p.item_id, v.id, p.priority, p.enabled
+        FROM product p JOIN product_v2 v ON v.store_id = p.store_id AND v.url = p.url;
+    DROP TABLE product;
+    ALTER TABLE product_v2 RENAME TO product;
+
+    -- Link to a store's own site search, with {} where the search term goes. Lines
+    -- without a product get it, so no line is a dead end. Editable under Settings.
+    ALTER TABLE store ADD COLUMN search_url TEXT;
+    UPDATE store SET search_url = 'https://www.kingsoopers.com/search?query={}'
+        WHERE name = 'King Soopers';
+    UPDATE store SET search_url = 'https://sameday.costco.com/store/costco/s?k={}'
+        WHERE name = 'Costco';
+    UPDATE store SET search_url = 'https://totalbev.com/shop/?ch-query={}'
+        WHERE name = 'Total Beverage';
+    """,
 ]
 
 

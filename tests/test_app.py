@@ -1,3 +1,4 @@
+import re
 from contextlib import asynccontextmanager
 
 import pytest
@@ -29,89 +30,155 @@ def sid(conn, name):
     return conn.execute("SELECT id FROM store WHERE name = ?", (name,)).fetchone()[0]
 
 
-def test_line_to_product_to_ordered(env):
+def item_of(conn, line_id):
+    return conn.execute(
+        "SELECT item_id FROM list_line WHERE anylist_item_id = ?", (line_id,)
+    ).fetchone()[0]
+
+
+def section(page: str, heading: str) -> str:
+    """The HTML from an <h2> starting with `heading` up to the next <h2>."""
+    match = re.search(rf"<h2>{re.escape(heading)}.*?(?=<h2>|\Z)", page, re.S)
+    assert match, f"no section {heading!r}"
+    return match.group(0)
+
+
+def test_list_groups_every_line_once(env):
     client, conn, fake = env
-    fake.add("a", "Bananas", "King Soopers", quantity="6")
+    fake.add("a", "Prosciutto", "Costco")
+    fake.add("b", "Kewpie mayo", "H-Mart")
+    fake.add("c", "Shower rod")
+    fake.add("d", "Templeton Rye", "Total Beverage", quantity="2")
     client.post("/sync")
+    page = client.get("/").text
+    assert "Shower rod" in section(page, "No store yet (1)")
+    assert "Prosciutto" in section(page, "Costco (1)")
+    assert "× 2" in section(page, "Total Beverage (1)")
+    assert "Kewpie mayo" in section(page, "In person (1)") and "H-Mart" in page
+    assert page.index("No store yet") < page.index("King Soopers (0)")
+
+
+def test_setting_a_store_from_the_burndown_writes_anylist(env):
+    client, conn, fake = env
+    fake.add("a", "Shower rod")
+    client.post("/sync")
+    client.post("/lines/a/store", data={"store": "Costco"})
+    assert fake.stores_of("a") == {"Costco"}
+    assert "No store yet" not in client.get("/").text
+
+
+def test_product_links_and_pick_one(env):
+    client, conn, fake = env
+    fake.add("a", "lemon juice", "King Soopers")
+    client.post("/sync")
+    item = f"/items/{item_of(conn, 'a')}"
     ks = sid(conn, "King Soopers")
 
-    page = client.get(f"/stores/{ks}").text
-    assert "Bananas" in page and "/match?name=Bananas" in page
+    page = section(client.get("/").text, "King Soopers")
+    assert "kingsoopers.com/search?query=lemon+juice" in page  # no product yet
 
-    item = client.post("/items", data={"name": "Bananas"}).url.path
-    assert "King Soopers" in client.get(item).text  # adopted from AnyList
-    client.post(
-        f"{item}/products",
-        data={"store_id": ks, "label": "Bananas (1 lb)", "url": "https://example.com/b"},
-    )
-    page = client.get(f"/stores/{ks}").text
-    assert "https://example.com/b" in page and "× 6" in page
-
-    client.post(f"/stores/{ks}/ordered", data={"ids": ["a"]})
-    assert "Bananas" not in client.get(f"/stores/{ks}").text
-    assert "Bananas" in client.get("/on-the-way").text
-    client.post("/lines/not-received", data={"ids": ["a"]})
-    assert "Bananas" in client.get(f"/stores/{ks}").text
+    for label, url in [("Bottled juice", "https://x/juice"), ("Whole lemons", "https://x/lemon")]:
+        client.post(f"{item}/products", data={"store_id": ks, "label": label, "url": url})
+    page = section(client.get("/").text, "King Soopers")
+    assert "pick one:" in page and "https://x/juice" in page and "https://x/lemon" in page
 
 
-def test_preferred_store_and_also_available(env):
+def test_product_is_shared_between_items(env):
+    client, conn, fake = env
+    fake.add("a", "lemon juice", "King Soopers")
+    fake.add("b", "lemon", "King Soopers")
+    client.post("/sync")
+    ks = sid(conn, "King Soopers")
+    juice, lemon = f"/items/{item_of(conn, 'a')}", f"/items/{item_of(conn, 'b')}"
+    client.post(f"{lemon}/products", data={"store_id": ks, "label": "Lemons", "url": "https://x/l"})
+    (pid,) = conn.execute("SELECT id FROM product").fetchone()
+
+    assert "used by lemon" in client.get(juice).text  # offered for reuse
+    client.post(f"{juice}/link-product", data={"product_id": pid})
+    assert "also used by lemon" in client.get(juice).text
+    assert conn.execute("SELECT count(*) FROM product").fetchone()[0] == 1
+
+    client.post(f"{juice}/products/{pid}/unlink")
+    assert conn.execute("SELECT count(*) FROM product").fetchone()[0] == 1  # lemon keeps it
+    client.post(f"{lemon}/products/{pid}/unlink")
+    assert conn.execute("SELECT count(*) FROM product").fetchone()[0] == 0
+
+
+def test_also_available_and_ordering_from_there(env):
     client, conn, fake = env
     fake.add("a", "milk")
-    item = client.post("/items", data={"name": "Milk"}).url.path
+    client.post("/sync")
+    item = f"/items/{item_of(conn, 'a')}"
     client.post(f"{item}/stores", data={"preferred": "Natural Grocers", "stores": ["King Soopers"]})
     assert fake.stores_of("a") == {"Natural Grocers", "King Soopers"}
-
-    ng = client.get(f"/stores/{sid(conn, 'Natural Grocers')}").text
-    ks = client.get(f"/stores/{sid(conn, 'King Soopers')}").text
-    assert ng.index("milk") < ng.index("Mark ticked")
-    assert "Also available here" in ks and "milk" in ks
+    page = client.get("/").text
+    assert "also at King Soopers" in section(page, "Natural Grocers (1)")
+    assert "King Soopers (0)" in page
 
     client.post(f"/stores/{sid(conn, 'King Soopers')}/ordered", data={"ids": ["a"]})
-    assert "milk" not in client.get(f"/stores/{sid(conn, 'Natural Grocers')}").text
+    page = client.get("/").text
+    assert "Natural Grocers (0)" in page and "On the way (1)" in page
+    client.post("/lines/not-received", data={"ids": ["a"]})
+    assert "Natural Grocers (1)" in client.get("/").text
 
 
 def test_ui_store_change_applies_on_top_of_anylist_edits(env):
     client, conn, fake = env
-    fake.add("a", "milk")
-    item = client.post("/items", data={"name": "Milk"}).url.path
-    client.post(f"{item}/stores", data={"preferred": "King Soopers"})
+    fake.add("a", "milk", "King Soopers")
+    client.post("/sync")
     fake.set_by_hand("a", "Costco")  # person edits AnyList, then someone edits the UI
+    item = f"/items/{item_of(conn, 'a')}"
     client.post(f"{item}/stores", data={"preferred": "Natural Grocers", "stores": ["Costco"]})
     assert fake.stores_of("a") == {"Natural Grocers", "Costco"}
-    assert "Only at" not in client.get("/items").text
 
 
-def test_hand_pick_is_never_in_the_order_list(env):
+def test_hand_pick_goes_in_person(env):
     client, conn, fake = env
     fake.add("a", "ribeye", "King Soopers", "Costco")
-    item = client.post("/items", data={"name": "Ribeye"}).url.path
+    client.post("/sync")
+    item = f"/items/{item_of(conn, 'a')}"
     client.post(item, data={"name": "Ribeye", "hand_pick": "true"})
-    ks = client.get(f"/stores/{sid(conn, 'King Soopers')}").text
-    assert "Pick in person" in ks
-    assert ks.index("ribeye") > ks.index("Pick in person")
-    assert "ribeye" not in client.get(f"/stores/{sid(conn, 'Costco')}").text
+    page = client.get("/").text
+    assert "ribeye" in section(page, "In person (1)")
+    assert "King Soopers (0)" in page and "Costco (0)" in page
+
+
+def test_merge_from_the_item_page(env):
+    client, conn, fake = env
+    fake.add("a", "Avocados", "King Soopers")
+    fake.add("b", "Avocado")
+    client.post("/sync")
+    keep, typo = item_of(conn, "a"), item_of(conn, "b")
+    client.post(f"/items/{keep}/merge", data={"source": typo})
+    assert item_of(conn, "b") == keep
+    assert fake.stores_of("b") == {"King Soopers"}
+    assert "No store yet" not in client.get("/").text
+
+
+def test_search_links_are_editable(env):
+    client, conn, fake = env
+    fake.add("a", "flax", "Natural Grocers")
+    client.post("/sync")
+    ng = sid(conn, "Natural Grocers")
+    assert "Search Natural Grocers" not in client.get("/").text
+    client.post("/settings/search-links", data={f"search_url_{ng}": "https://ng.example/s/{}"})
+    assert "https://ng.example/s/flax" in client.get("/").text
 
 
 def test_every_page_renders(env):
     client, conn, fake = env
     fake.add("a", "milk", "King Soopers", "H-Mart")
     client.post("/sync")
-    item = client.post("/items", data={"name": "Milk"}).url.path
-    pages = ["/", "/items", item, "/on-the-way", "/settings", "/match?name=milk", "/healthz"]
-    pages += [
-        f"/stores/{s}" for (s,) in conn.execute("SELECT id FROM store WHERE kind != 'offline'")
-    ]
-    for path in pages:
+    for path in ["/", "/items", f"/items/{item_of(conn, 'a')}", "/settings", "/healthz"]:
         assert client.get(path).status_code == 200, path
-    assert client.get(f"/stores/{sid(conn, 'H-Mart')}").status_code == 404
 
 
-def test_kroger_search_needs_a_picked_store(env):
+def test_kroger_search_runs_on_open_once_a_store_is_picked(env):
     client, conn, fake = env
     fake.add("a", "butter", "King Soopers")
-    item = client.post("/items", data={"name": "Butter"}).url.path
-    page = client.get(f"{item}?q=butter").text
-    assert "Pick your store" in page
+    client.post("/sync")
+    item = f"/items/{item_of(conn, 'a')}"
+    assert "Pick your store" in client.get(item).text
     assert client.app.state.svc.kroger.searched_at == []
 
     assert "Test Marketplace" in client.get("/settings?zip=80007").text
@@ -119,6 +186,6 @@ def test_kroger_search_needs_a_picked_store(env):
         "/settings/kroger-location",
         data={"id": "62000001", "name": "Test Marketplace", "address": "1 Main St"},
     )
-    page = client.get(f"{item}?q=butter").text
+    page = client.get(item).text  # no product yet, so it searches straight away
     assert "kingsoopers.com/p/butter/0001" in page
     assert client.app.state.svc.kroger.searched_at == ["62000001"]
