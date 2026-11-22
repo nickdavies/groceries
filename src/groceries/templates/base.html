@@ -18,7 +18,7 @@
   <header class="app">
     <a class="brand" href="/"><wa-icon name="basket-shopping"></wa-icon><span>Groceries</span></a>
     <nav>
-      {% for href, label in [("/", "List"), ("/items", "Items"), ("/settings", "Settings")] %}
+      {% for href, label in [("/", "List"), ("/items", "Items"), ("/names", "Names"), ("/settings", "Settings")] %}
       <a href="{{ href }}"{% if path == href or (href != "/" and path.startswith(href)) %} aria-current="page"{% endif %}>{{ label }}</a>
       {% endfor %}
     </nav>

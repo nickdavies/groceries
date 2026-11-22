@@ -6,10 +6,12 @@ periodically. Store changes made here are written to AnyList straight away.
 """
 
 import asyncio
+import itertools
 import json
 import logging
 import os
 import sqlite3
+from collections import defaultdict
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -22,8 +24,9 @@ from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from . import anylist, db, sync
+from . import anylist, db, rename, suggest, sync
 from .kroger import Kroger, Location
+from .normalize import normalize
 
 log = logging.getLogger(__name__)
 HERE = Path(__file__).parent
@@ -80,7 +83,25 @@ class Services:
     async def merge_items(self, source: int, target: int) -> None:
         async with self.lock:
             sync.merge_items(self.conn, source, target)
+            sync.make_canonical(self.conn, target)
             await self._sync_locked()
+
+    async def map_name(self, key: str, target: int, unit: str, style: str) -> None:
+        """Map an AnyList name into an item. Its rewrites then wait on /names for review,
+        unless the exact same rewrite was approved before."""
+        async with self.lock:
+            sync.map_name(self.conn, key, target, unit, style)
+            await self._sync_locked()
+
+    async def approve(self, forms: list[rename.Form]) -> None:
+        """Approve rewrites and write them now, along with any others already approved."""
+        async with self.lock:
+            rename.approve(self.conn, forms)
+            await self._sync_locked()
+
+    @property
+    def snapshot(self) -> anylist.Snapshot | None:
+        return self.last_sync.snapshot if self.last_sync else None
 
     async def add_store(self, name: str, kind: str) -> None:
         """Create a store here and on the AnyList list, so it can be picked in both."""
@@ -229,6 +250,73 @@ def build_list(conn) -> ListView:
     return view
 
 
+@dataclass
+class FormGroup:
+    """Every planned rewrite that one approval covers."""
+
+    form: rename.Form
+    changes: list[rename.Change]
+    approved: bool
+
+
+@dataclass
+class ItemReview:
+    item: sqlite3.Row
+    groups: list[FormGroup]
+
+
+def build_review(conn, snap: anylist.Snapshot | None) -> list[ItemReview]:
+    """The canonical items' rewrites not yet written, grouped by item and approval.
+    Approved ones only show up here while held back or if their write was skipped."""
+    if snap is None:
+        return []
+    ok = rename.approvals(conn)
+    by_item: dict[int, dict[rename.Form, list]] = defaultdict(lambda: defaultdict(list))
+    for change in rename.plan(conn, snap):
+        by_item[change.item_id][change.form].append(change)
+    items = {r["id"]: r for r in conn.execute("SELECT id, name FROM item WHERE canonical")}
+    return sorted(
+        (
+            ItemReview(
+                items[item_id],
+                [FormGroup(f, cs, f in ok) for f, cs in sorted(forms.items(), key=str)],
+            )
+            for item_id, forms in by_item.items()
+        ),
+        key=lambda r: r.item["name"].casefold(),
+    )
+
+
+def name_nodes(conn) -> list[suggest.Name]:
+    """Every name suggestions can pair: names seen in AnyList that aren't ignored, and
+    every item's own name."""
+    refs = {
+        r["external_id"]: r
+        for r in conn.execute(
+            "SELECT r.external_id, i.id, i.name, i.canonical FROM external_ref r "
+            "JOIN item i ON i.id = r.item_id WHERE r.source = 'anylist'"
+        )
+    }
+    nodes = {}
+    for r in conn.execute("SELECT * FROM anylist_name WHERE NOT ignored"):
+        ref = refs.get(r["key"])
+        own = ref is not None and normalize(ref["name"]) == r["key"]
+        nodes[r["key"]] = suggest.Name(
+            r["key"],
+            ref["name"] if own else r["label"],
+            r["line_count"] + r["recipe_count"],
+            ref["id"] if ref else None,
+            ref["name"] if ref else None,
+            own,
+            bool(ref and ref["canonical"]),
+        )
+    for i in conn.execute("SELECT id, name, canonical FROM item"):
+        key = normalize(i["name"])
+        if key not in nodes:
+            nodes[key] = suggest.Name(key, i["name"], 0, i["id"], i["name"], True, i["canonical"])
+    return list(nodes.values())
+
+
 def search_link(store, term: str) -> str | None:
     template = store["search_url"]
     return template.replace("{}", quote_plus(term)) if template else None
@@ -332,9 +420,9 @@ def _routes(app: FastAPI) -> None:
             (item_id,),
         ).fetchall()
         aliases = conn.execute(
-            "SELECT external_id FROM external_ref WHERE source = 'anylist' AND item_id = ? "
-            "ORDER BY external_id",
-            (item_id,),
+            "SELECT external_id, unit, style, external_id = ? AS own FROM external_ref "
+            "WHERE source = 'anylist' AND item_id = ? ORDER BY external_id",
+            (normalize(item["name"]), item_id),
         ).fetchall()
         products = {s["id"]: item_products(conn, item_id, s["id"], False) for s in stores}
         reusable = {
@@ -403,12 +491,140 @@ def _routes(app: FastAPI) -> None:
         name: Annotated[str, Form()],
         hand_pick: Annotated[bool, Form()] = False,
         note: Annotated[str, Form()] = "",
+        canonical: Annotated[bool, Form()] = False,
+    ):
+        """A canonical item's AnyList names are rewritten to its name, after review on
+        /names. Renaming it changes every rewrite, so they all wait for review again."""
+        conn = _svc(request).conn
+        name = name.strip()
+        clash = conn.execute(
+            "SELECT 1 FROM item WHERE name = ? AND id != ?", (name, item_id)
+        ).fetchone()
+        if clash:
+            raise HTTPException(409, f"There is already an item named {name!r}. Merge instead.")
+        conn.execute(
+            "UPDATE item SET name = ?, hand_pick = ?, note = ?, canonical = 0 WHERE id = ?",
+            (name, int(hand_pick), note.strip(), item_id),
+        )
+        if canonical:
+            try:
+                sync.make_canonical(conn, item_id)
+            except sync.NameTaken as e:
+                raise HTTPException(
+                    409, f"{e} is another item's AnyList name. Merge that item instead."
+                ) from e
+        return RedirectResponse(f"/items/{item_id}", status_code=303)
+
+    @app.post("/items/{item_id}/aliases")
+    async def update_alias(
+        request: Request,
+        item_id: int,
+        key: Annotated[str, Form()],
+        unit: Annotated[str, Form()] = "",
+        style: Annotated[str, Form()] = "",
     ):
         _svc(request).conn.execute(
-            "UPDATE item SET name = ?, hand_pick = ?, note = ? WHERE id = ?",
-            (name.strip(), int(hand_pick), note.strip(), item_id),
+            "UPDATE external_ref SET unit = ?, style = ? "
+            "WHERE source = 'anylist' AND external_id = ? AND item_id = ?",
+            (unit.strip(), style.strip(), key, item_id),
         )
-        return RedirectResponse(f"/items/{item_id}", status_code=303)
+        return RedirectResponse(f"/items/{item_id}#names", status_code=303)
+
+    @app.post("/items/{item_id}/aliases/split")
+    async def split_alias(request: Request, item_id: int, key: Annotated[str, Form()]):
+        sync.split_off(_svc(request).conn, item_id, key)
+        return RedirectResponse(f"/items/{item_id}#names", status_code=303)
+
+    @app.get("/names")
+    async def names(request: Request, q: str = ""):
+        svc = _svc(request)
+        conn = svc.conn
+        distinct = {(r["a"], r["b"]) for r in conn.execute("SELECT a, b FROM name_distinct")}
+        suggestions = suggest.suggest(name_nodes(conn), distinct)
+
+        def by_target(contains: bool) -> list:
+            chosen = [s for s in suggestions if s.reason.startswith("contains") == contains]
+            return [(t, list(g)) for t, g in itertools.groupby(chosen, key=lambda s: s.target)]
+
+        unmapped = conn.execute(
+            """
+            SELECT n.* FROM anylist_name n
+            WHERE NOT n.ignored AND n.key NOT IN
+              (SELECT external_id FROM external_ref WHERE source = 'anylist')
+            ORDER BY n.label COLLATE NOCASE
+            """
+        ).fetchall()
+        odd = [(r, suggest.kind(r["label"])) for r in unmapped if suggest.kind(r["label"])]
+        found = []
+        if q.strip():
+            found = conn.execute(
+                """
+                SELECT n.*, r.item_id, i.name AS item_name FROM anylist_name n
+                LEFT JOIN external_ref r ON r.source = 'anylist' AND r.external_id = n.key
+                LEFT JOIN item i ON i.id = r.item_id
+                WHERE n.key LIKE ? ORDER BY n.label COLLATE NOCASE LIMIT 100
+                """,
+                (f"%{normalize(q)}%",),
+            ).fetchall()
+        return _render(
+            request,
+            "names.html",
+            review=build_review(conn, svc.snapshot),
+            likely=by_target(False),
+            contains=by_target(True),
+            odd=odd,
+            q=q,
+            found=found,
+            items=conn.execute("SELECT name FROM item ORDER BY name COLLATE NOCASE").fetchall(),
+            log=conn.execute("SELECT * FROM rename_log ORDER BY id DESC LIMIT 50").fetchall(),
+            loads=json.loads,
+        )
+
+    @app.post("/names/map")
+    async def map_name(
+        request: Request,
+        key: Annotated[str, Form()],
+        target_id: Annotated[int | None, Form()] = None,
+        target_name: Annotated[str, Form()] = "",
+        unit: Annotated[str, Form()] = "",
+        style: Annotated[str, Form()] = "",
+    ):
+        """Map `key` into an item: `target_id`, or the item named `target_name` (created
+        if there is none)."""
+        svc = _svc(request)
+        if target_id is None:
+            if not target_name.strip():
+                raise HTTPException(400, "Pick an item to map into.")
+            target_id = sync.item_for_name(svc.conn, target_name)
+        try:
+            await svc.map_name(key, target_id, unit, style)
+        except sync.NameTaken as e:
+            raise HTTPException(409, f"{e} is another item's AnyList name.") from e
+        return RedirectResponse("/names#review", status_code=303)
+
+    @app.post("/names/distinct")
+    async def names_distinct(
+        request: Request, a: Annotated[str, Form()], b: Annotated[str, Form()]
+    ):
+        _svc(request).conn.execute(
+            "INSERT OR IGNORE INTO name_distinct (a, b) VALUES (?, ?)", tuple(sorted((a, b)))
+        )
+        return _back(request, "/names")
+
+    @app.post("/names/ignore")
+    async def names_ignore(
+        request: Request, key: Annotated[str, Form()], ignored: Annotated[bool, Form()] = True
+    ):
+        _svc(request).conn.execute(
+            "UPDATE anylist_name SET ignored = ? WHERE key = ?", (int(ignored), key)
+        )
+        return _back(request, "/names")
+
+    @app.post("/names/approve")
+    async def names_approve(request: Request, forms: Annotated[list[str] | None, Form()] = None):
+        if forms:
+            await _svc(request).approve([rename.Form.from_json(f) for f in forms])
+        return RedirectResponse("/names#review", status_code=303)
 
     @app.post("/items/{item_id}/stores")
     async def update_item_stores(

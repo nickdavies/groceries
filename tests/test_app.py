@@ -1,3 +1,4 @@
+import html
 import re
 from contextlib import asynccontextmanager
 
@@ -292,3 +293,94 @@ def test_search_with_no_results_says_so(env):
     )
     assert "No results" not in client.get(item).text
     assert 'No results for "no such thing"' in client.get(f"{item}?q=no such thing").text
+
+
+def test_names_flow_from_suggestion_to_written(env):
+    client, conn, fake = env
+    fake.add("a", "Shallot", "King Soopers")
+    fake.add("b", "minced shallot", checked=True)
+    fake.add_recipe("r", "Chicken au Poivre", ("i", "2 tablespoons", "minced shallot", ""))
+    fake.add_recipe("s", "Soup", ("j", "", "salt and pepper", "to taste"))
+    client.post("/sync")
+
+    page = client.get("/names").text
+    suggestions = section(page, "Likely the same")
+    assert "minced shallot" in suggestions and "same words" in suggestions
+    assert "salt and pepper" in section(page, "Compounds and choices")
+    assert "Nothing to review" in section(page, "Needs review")
+
+    shallot = conn.execute("SELECT id FROM item WHERE name = 'Shallot'").fetchone()[0]
+    client.post(
+        "/names/map",
+        data={"key": "minced shallot", "target_id": shallot, "unit": "", "style": "minced"},
+    )
+    review = section(client.get("/names").text, "Needs review")
+    assert "2 tablespoons minced shallot" in review and "2 tablespoons Shallot, minced" in review
+    assert "Shared List, crossed off" in review
+    assert fake.ingredient_writes == [] and fake.line_writes == []
+
+    forms = [html.unescape(v) for v in re.findall(r'name="forms" value="([^"]+)"', review)]
+    assert len(forms) == 2
+    client.post("/names/approve", data={"forms": forms[:1]})
+    assert len(fake.ingredient_writes) + len(fake.line_writes) == 1
+    client.post("/names/approve", data={"forms": forms[1:]})
+    assert fake.ingredient("r", "i").raw == "2 tablespoons Shallot, minced"
+    assert fake.lines["b"].name == "Shallot"
+
+    page = client.get("/names").text
+    assert "Nothing to review" in section(page, "Needs review")
+    assert "Chicken au Poivre" in section(page, "Recent rewrites")
+
+
+def test_not_the_same_and_ignore_hide_suggestions(env):
+    client, conn, fake = env
+    fake.add("a", "Lemon", "King Soopers")
+    fake.add("b", "Lemon juice", checked=True)
+    fake.add("c", "Lemon curd", checked=True)
+    client.post("/sync")
+    assert "Lemon juice" in section(client.get("/names").text, "Contains another name")
+    client.post("/names/distinct", data={"a": "lemon juice", "b": "lemon"})
+    client.post("/names/ignore", data={"key": "lemon curd"})
+    suggestions = section(client.get("/names").text, "Contains another name")
+    assert "Lemon juice" not in suggestions and "Lemon curd" not in suggestions
+
+
+def test_map_by_name_creates_the_item(env):
+    client, conn, fake = env
+    fake.add_recipe("r", "Pie", ("i", "3", "Eggs, whites", ""))
+    client.post("/sync")
+    client.post(
+        "/names/map", data={"key": "eggs, whites", "target_name": "Eggs", "style": "whites"}
+    )
+    row = conn.execute("SELECT id, canonical FROM item WHERE name = 'Eggs'").fetchone()
+    assert row["canonical"] == 1
+    assert "3 Eggs, whites" in section(client.get("/names").text, "Needs review")
+
+
+def test_item_aliases_edit_and_split_off(env):
+    client, conn, fake = env
+    fake.add("a", "Garlic", "King Soopers")
+    fake.add("b", "garlic cloves", checked=True)
+    client.post("/sync")
+    garlic = conn.execute("SELECT id FROM item WHERE name = 'Garlic'").fetchone()[0]
+    client.post("/names/map", data={"key": "garlic cloves", "target_id": garlic})
+    client.post(f"/items/{garlic}/aliases", data={"key": "garlic cloves", "unit": "cloves"})
+    ref = conn.execute("SELECT unit FROM external_ref WHERE external_id = 'garlic cloves'")
+    assert ref.fetchone()[0] == "cloves"
+    assert "Split off" in client.get(f"/items/{garlic}").text
+    client.post(f"/items/{garlic}/aliases/split", data={"key": "garlic cloves"})
+    assert "Nothing to review" in section(client.get("/names").text, "Needs review")
+
+
+def test_renaming_an_item_to_another_items_name_is_refused(env):
+    client, conn, fake = env
+    fake.add("a", "Onion", "King Soopers")
+    fake.add("b", "Onions", "King Soopers")
+    client.post("/sync")
+    onion = conn.execute("SELECT id FROM item WHERE name = 'Onion'").fetchone()[0]
+    response = client.post(f"/items/{onion}", data={"name": "Onions"})
+    assert response.status_code == 409
+    response = client.post(f"/items/{onion}", data={"name": "Yellow Onion", "canonical": "true"})
+    assert response.status_code == 200
+    row = conn.execute("SELECT name, canonical FROM item WHERE id = ?", (onion,)).fetchone()
+    assert tuple(row) == ("Yellow Onion", 1)

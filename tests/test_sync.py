@@ -36,7 +36,8 @@ def make_item(conn, name, *stores, aliases=()):
     item_id = conn.execute("INSERT INTO item (name) VALUES (?)", (name,)).lastrowid
     for alias in (name, *aliases):
         conn.execute(
-            "INSERT INTO external_ref VALUES ('anylist', ?, ?)", (alias.casefold(), item_id)
+            "INSERT INTO external_ref (source, external_id, item_id) VALUES ('anylist', ?, ?)",
+            (alias.casefold(), item_id),
         )
     if stores:
         set_item_stores(conn, item_id, stores, preferred=stores[0])

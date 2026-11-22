@@ -1,0 +1,163 @@
+{% extends "base.html" %}
+{% block title %}Names{% endblock %}
+
+{% macro ingredient_text(t) %}<code>{{ t.raw or '(empty)' }}</code>
+  <div class="hint">quantity “{{ t.quantity }}” · name “{{ t.name }}” · note “{{ t.note }}”</div>{% endmacro %}
+
+{% macro line_text(t) %}<code>{{ t.name }}</code>{% if t.details %} <span class="hint">details “{{ t.details }}”</span>{% endif %}{% endmacro %}
+
+{% macro describe(f) %}
+  {% if f.kind == 'ingredient' %}Recipe ingredient{% else %}List line{% endif %}
+  named <strong>“{{ f.name }}”</strong>
+  {% if f.kind == 'ingredient' %}with {% if f.extra %}note “{{ f.extra }}”{% else %}no note{% endif %},
+    quantity {{ 'a bare number' if f.bare_quantity else 'with a unit, or none' }}
+  {% elif f.extra %}with details “{{ f.extra }}”{% else %}with no details{% endif %}
+  → <strong>“{{ f.new_name }}”</strong>{% if f.unit %}, unit “{{ f.unit }}”{% endif %}{% if f.style %}, style “{{ f.style }}”{% endif %}
+{% endmacro %}
+
+{% macro map_fields(unit, style) %}
+  <input name="unit" value="{{ unit }}" placeholder="unit (e.g. cloves)" size="10">
+  <input name="style" value="{{ style }}" placeholder="style, goes in the note (e.g. minced)">
+{% endmacro %}
+
+{% block content %}
+<h1>Names</h1>
+<p class="hint">Give an item one name in AnyList. Map variant names into an item here, then approve the exact rewrites it makes to recipes and list lines. A later occurrence is only rewritten without asking if it matches an approved rewrite exactly; anything else waits here.</p>
+
+<datalist id="item-names">{% for i in items %}<option value="{{ i.name }}">{% endfor %}</datalist>
+
+<div class="panel" id="review">
+<h2>Needs review {{ review|map(attribute='groups')|map('length')|sum }}</h2>
+{% if not svc.snapshot %}<p class="hint">Sync first to see what would change.</p>{% endif %}
+{% if review %}
+<form method="post" action="/names/approve">
+  {% for r in review %}
+  <section>
+    <h3><a href="/items/{{ r.item.id }}#names">{{ r.item.name }}</a></h3>
+    {% for g in r.groups %}
+    <wa-details open>
+      <span slot="summary">
+        {% if g.approved %}
+          <wa-badge variant="{{ 'warning' if g.changes[0].held else 'neutral' }}">{{ 'held back' if g.changes[0].held else 'approved, not written yet' }}</wa-badge>
+        {% else %}
+          <input type="checkbox" name="forms" value="{{ g.form.to_json() }}" onclick="event.stopPropagation()">
+        {% endif %}
+        {{ describe(g.form) }} <span class="hint">({{ g.changes|length }} {{ 'place' if g.changes|length == 1 else 'places' }})</span>
+      </span>
+      <table>
+        <thead><tr><th>Where</th><th>Now</th><th>After</th></tr></thead>
+        <tbody>
+        {% for c in g.changes %}
+          <tr>
+            <td>{{ c.place }}{% if c.held %}<div class="hint">Held: {{ c.held }}</div>{% endif %}</td>
+            {% if c.form.kind == 'ingredient' %}
+            <td>{{ ingredient_text(c.old) }}</td><td>{{ ingredient_text(c.new) }}</td>
+            {% else %}
+            <td>{{ line_text(c.old) }}</td><td>{{ line_text(c.new) }}</td>
+            {% endif %}
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </wa-details>
+    {% endfor %}
+  </section>
+  {% endfor %}
+  <button class="wa-brand">Approve and write selected</button>
+</form>
+{% elif svc.snapshot %}
+<p class="hint">Nothing to review.</p>
+{% endif %}
+</div>
+
+{% macro suggestion_panel(id, title, groups, hint) %}
+<div class="panel" id="{{ id }}">
+<h2>{{ title }} {{ groups|map(attribute=1)|map('length')|sum }}</h2>
+<p class="hint">{{ hint }} Mapping a name makes the item's AnyList name canonical, and its rewrites then appear under Needs review. Nothing is written until you approve.</p>
+{% for target, group in groups %}
+<section>
+  <h3>{% if target.item_id %}<a href="/items/{{ target.item_id }}">{{ target.label }}</a>{% else %}{{ target.label }} <wa-badge variant="neutral" appearance="outlined">new item</wa-badge>{% endif %}</h3>
+  {% for s in group %}
+  <form method="post" action="/names/map" class="inline">
+    <input type="hidden" name="key" value="{{ s.alias.key }}">
+    <input type="hidden" name="a" value="{{ s.alias.key }}">
+    <input type="hidden" name="b" value="{{ s.target.key }}">
+    {% if target.item_id %}<input type="hidden" name="target_id" value="{{ target.item_id }}">
+    {% else %}<input type="hidden" name="target_name" value="{{ target.label }}">{% endif %}
+    <span><strong>{{ s.alias.label }}</strong> <span class="hint">{{ s.reason }} · used {{ s.alias.count }}×
+      {% if s.alias.item_id and s.alias.item_id != target.item_id %} · merges item “{{ s.alias.item_name }}” (its stores and products move){% endif %}</span></span>
+    {{ map_fields(s.unit, s.style) }}
+    <button class="wa-brand">Map</button>
+    <button class="wa-outlined" formaction="/names/distinct">Not the same</button>
+    <button class="wa-outlined" formaction="/names/ignore">Ignore</button>
+  </form>
+  {% endfor %}
+</section>
+{% else %}
+<p class="hint">None.</p>
+{% endfor %}
+</div>
+{% endmacro %}
+
+{{ suggestion_panel("likely", "Likely the same", likely,
+     "Names with the same words once prep words and plurals are set aside, or spelled almost like an item.") }}
+{{ suggestion_panel("contains", "Contains another name", contains,
+     "Names that contain a shorter one (“banana shallot” contains “shallot”). Often a different thing (“garlic powder”): mark those Not the same.") }}
+
+<div class="panel" id="compounds">
+<h2>Compounds and choices {{ odd|length }}</h2>
+<p class="hint">Compounds (“salt and pepper”) are two things in one ingredient, and choices (“walnuts or chocolate chips”) are either one. Neither is suggested. Map one to a single item if that's what you buy, or ignore it.</p>
+{% for r, kind in odd %}
+<form method="post" action="/names/map" class="inline">
+  <input type="hidden" name="key" value="{{ r.key }}">
+  <span><wa-badge variant="neutral" appearance="outlined">{{ kind }}</wa-badge> <strong>{{ r.label }}</strong>
+    <span class="hint">used {{ r.line_count + r.recipe_count }}×</span></span>
+  <input name="target_name" list="item-names" placeholder="item to map into">
+  {{ map_fields('', '') }}
+  <button class="wa-brand">Map</button>
+  <button class="wa-outlined" formaction="/names/ignore">Ignore</button>
+</form>
+{% endfor %}
+</div>
+
+<div class="panel" id="search">
+<h2>All names</h2>
+<form method="get" action="/names#search" class="inline">
+  <input name="q" value="{{ q }}" placeholder="Find a name in AnyList">
+  <button class="wa-outlined">Search</button>
+</form>
+{% for r in found %}
+<form method="post" action="/names/map" class="inline">
+  <input type="hidden" name="key" value="{{ r.key }}">
+  <span><strong>{{ r.label }}</strong> <span class="hint">{{ r.line_count }} lines · {{ r.recipe_count }} recipe ingredients{% if r.ignored %} · ignored{% endif %}
+    {% if r.item_id %} · in <a href="/items/{{ r.item_id }}">{{ r.item_name }}</a>{% endif %}</span></span>
+  <input name="target_name" list="item-names" placeholder="item to map into" required>
+  {{ map_fields('', '') }}
+  <button class="wa-brand">Map</button>
+</form>
+{% endfor %}
+{% if q and not found %}<p class="hint">No names match “{{ q }}”.</p>{% endif %}
+</div>
+
+<div class="panel" id="log">
+<h2>Recent rewrites</h2>
+{% if log %}
+<table>
+  <thead><tr><th>When</th><th>Where</th><th>Before</th><th>After</th></tr></thead>
+  <tbody>
+  {% for e in log %}
+    {% set old, new = loads(e.old), loads(e.new) %}
+    <tr>
+      <td><wa-relative-time date="{{ e.at }}"></wa-relative-time></td>
+      <td>{{ e.place }}</td>
+      <td><code>{{ old.raw or old.name }}</code>{% if old.details %} <span class="hint">{{ old.details }}</span>{% endif %}</td>
+      <td><code>{{ new.raw or new.name }}</code>{% if new.details %} <span class="hint">{{ new.details }}</span>{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="hint">Nothing has been rewritten yet.</p>
+{% endif %}
+</div>
+{% endblock %}

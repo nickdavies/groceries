@@ -12,16 +12,19 @@ change wins. AnyList keeps no modification times, so "latest" comes from orderin
 Lines that have been ordered are left alone. Which store a line was ordered from lives
 only here, and the line drops out when someone checks it off in AnyList.
 
-Every AnyList name gets an item the first time it is seen. Names that mean the same
-thing ("Avocado", "Avocados") are combined afterwards with `merge_items`.
+Every name on an open line gets an item the first time it is seen. Names that mean the
+same thing ("Avocado", "Avocados") are combined afterwards with `merge_items` or
+`map_name`. Each sync also records every name in AnyList (crossed-off lines and recipes
+too) for /names, then writes the approved canonical-name rewrites (see rename.py).
 """
 
 import json
 import sqlite3
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-from .anylist import ListBackend
+from . import rename
+from .anylist import ListBackend, Snapshot
 from .normalize import normalize
 
 
@@ -31,9 +34,16 @@ class SyncReport:
     dropped: int = 0
     adopted: int = 0  # items whose stores were taken from AnyList
     written: int = 0  # lines whose stores were written to AnyList
+    renamed_ingredients: int = 0
+    renamed_lines: int = 0
+    snapshot: Snapshot | None = field(default=None, repr=False)  # AnyList after this sync
 
 
-def _item_for(conn: sqlite3.Connection, name: str) -> int:
+class NameTaken(Exception):
+    """An item's name is already another item's AnyList name. Merge them instead."""
+
+
+def item_for_name(conn: sqlite3.Connection, name: str) -> int:
     """The item an AnyList name maps to, creating it on first sight."""
     key = normalize(name)
     row = conn.execute(
@@ -48,8 +58,61 @@ def _item_for(conn: sqlite3.Connection, name: str) -> int:
         if existing
         else conn.execute("INSERT INTO item (name) VALUES (?)", (label,)).lastrowid
     )
-    conn.execute("INSERT INTO external_ref VALUES ('anylist', ?, ?)", (key, item_id))
+    conn.execute(
+        "INSERT INTO external_ref (source, external_id, item_id) VALUES ('anylist', ?, ?)",
+        (key, item_id),
+    )
     return item_id
+
+
+def make_canonical(conn: sqlite3.Connection, item_id: int) -> None:
+    """Mark an item's names as curated, so its AnyList names are rewritten to its name.
+    Its own name becomes one of its AnyList names, so renamed lines still match it."""
+    (name,) = conn.execute("SELECT name FROM item WHERE id = ?", (item_id,)).fetchone()
+    key = normalize(name)
+    row = conn.execute(
+        "SELECT item_id FROM external_ref WHERE source = 'anylist' AND external_id = ?", (key,)
+    ).fetchone()
+    if row is not None and row["item_id"] != item_id:
+        raise NameTaken(name)
+    conn.execute(
+        "INSERT OR IGNORE INTO external_ref (source, external_id, item_id) "
+        "VALUES ('anylist', ?, ?)",
+        (key, item_id),
+    )
+    conn.execute("UPDATE item SET canonical = 1 WHERE id = ?", (item_id,))
+
+
+def map_name(
+    conn: sqlite3.Connection, key: str, target: int, unit: str = "", style: str = ""
+) -> None:
+    """Make the AnyList name `key` an alias of `target`, and `target` canonical. If the
+    name already belongs to another item, that item is merged into `target`."""
+    row = conn.execute(
+        "SELECT item_id FROM external_ref WHERE source = 'anylist' AND external_id = ?", (key,)
+    ).fetchone()
+    if row is not None and row["item_id"] != target:
+        merge_items(conn, row["item_id"], target)
+    conn.execute(
+        """
+        INSERT INTO external_ref (source, external_id, item_id, unit, style)
+        VALUES ('anylist', ?, ?, ?, ?)
+        ON CONFLICT (source, external_id) DO UPDATE SET
+          item_id = excluded.item_id, unit = excluded.unit, style = excluded.style
+        """,
+        (key, target, unit.strip(), style.strip()),
+    )
+    make_canonical(conn, target)
+
+
+def split_off(conn: sqlite3.Connection, item_id: int, key: str) -> None:
+    """Stop an alias mapping to its item. The item's own name can't be split off."""
+    (name,) = conn.execute("SELECT name FROM item WHERE id = ?", (item_id,)).fetchone()
+    if key != normalize(name):
+        conn.execute(
+            "DELETE FROM external_ref WHERE source = 'anylist' AND external_id = ? AND item_id = ?",
+            (key, item_id),
+        )
 
 
 def merge_items(conn: sqlite3.Connection, source: int, target: int) -> None:
@@ -148,6 +211,7 @@ async def sync(conn: sqlite3.Connection, backend: ListBackend) -> SyncReport:
     conn.execute("BEGIN")
     try:
         _mirror_stores(conn, snap.stores)
+        rename.record_names(conn, snap)
         known = [r[0] for r in conn.execute("SELECT anylist_item_id FROM list_line")]
         gone = [(i,) for i in known if i not in live_ids]
         conn.executemany("DELETE FROM list_line WHERE anylist_item_id = ?", gone)
@@ -157,7 +221,7 @@ async def sync(conn: sqlite3.Connection, backend: ListBackend) -> SyncReport:
             prev = conn.execute(
                 "SELECT * FROM list_line WHERE anylist_item_id = ?", (line.id,)
             ).fetchone()
-            item_id = _item_for(conn, line.name)
+            item_id = item_for_name(conn, line.name)
             target = _reconcile(conn, prev, item_id, line.stores, report)
             if target != line.stores:
                 writes[line.id] = target
@@ -181,6 +245,8 @@ async def sync(conn: sqlite3.Connection, backend: ListBackend) -> SyncReport:
 
     await _write(conn, backend, writes)
     report.written = len(writes)
+    report.renamed_ingredients, report.renamed_lines, snap = await rename.apply(conn, backend, snap)
+    report.snapshot = snap
     return report
 
 

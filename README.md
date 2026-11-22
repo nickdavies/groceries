@@ -33,6 +33,34 @@ ordered.
   reads that way. Stores cleared in AnyList put the item back under "No store yet".
 - **Notes.** An item can carry a short note shown next to its lines, e.g. which coffee
   shop.
+- **Names.** `/names` gives an item one name in AnyList. It lists every name in AnyList
+  (crossed-off lines and recipe ingredients too), and suggests merges:
+  - "likely the same": same words once prep words and plurals are set aside, or spelled
+    almost like an item;
+  - "contains another name": "garlic cloves" contains "garlic". Mark the wrong ones
+    "Not the same", and they stay hidden.
+
+  Compounds ("salt and pepper") and choices ("walnuts or chips") are listed separately.
+  - **Mapping.** Mapping a name into an item makes the item *canonical*: its other names
+    get rewritten to the item's name.
+  - **Unit and style.** Each mapped name carries an optional unit and style.
+    - The unit joins a bare-number quantity: "3 garlic cloves" becomes "3 cloves Garlic".
+    - The style goes in front of the ingredient's note or the line's details: "minced
+      shallot" becomes "Shallot, minced".
+    - A recipe's display text is rebuilt as "{quantity} {name}, {note}", the form
+      AnyList's editor writes. Scaling uses the quantity, not this text.
+  - **Review.** Each rewrite is shown with its exact before and after, and nothing is
+    written until it is approved.
+    - An approval covers one exact source (name, note or details, and whether the quantity
+      was a bare number) and one exact result. Later matches of that pair are written on
+      sync.
+    - Anything else waits for review: a different note, a different spelling, an edited
+      mapping or a renamed item.
+  - **Writing.** Recipes are written before list lines, so AnyList moves a recipe's open
+    lines to the new name and merges lines with the same unit.
+    - A recipe with an ordered line waits until that line is checked off, because moving
+      the line would lose its "On the way" state.
+    - Every rewrite is logged with its full old and new text.
 
 ## Develop
 

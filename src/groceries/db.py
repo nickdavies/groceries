@@ -182,6 +182,64 @@ MIGRATIONS = [
     ALTER TABLE item ADD COLUMN anywhere INTEGER NOT NULL DEFAULT 0;
     ALTER TABLE item ADD COLUMN note TEXT NOT NULL DEFAULT '';
     """,
+    """
+    -- Canonical names (rename.py). A canonical item's AnyList names are rewritten to
+    -- item.name, but only in forms a person approved; anything else waits for review.
+    --   canonical: a person curated this item's names. Never set automatically.
+    ALTER TABLE item ADD COLUMN canonical INTEGER NOT NULL DEFAULT 0;
+    -- What an alias carries when it is rewritten: `unit` joins a bare-number quantity
+    -- ("3" + "cloves"), `style` goes in front of the note ("minced", "whites").
+    ALTER TABLE external_ref ADD COLUMN unit TEXT NOT NULL DEFAULT '';
+    ALTER TABLE external_ref ADD COLUMN style TEXT NOT NULL DEFAULT '';
+
+    -- Every name seen in AnyList, on list lines (crossed off too) or in recipes, item
+    -- or not. /names suggests merges from these.
+    --   key: normalize(name). label: its most common spelling. spellings: JSON list.
+    --   ignored: a person said not to suggest it ("salt and pepper to taste").
+    CREATE TABLE anylist_name (
+        key TEXT PRIMARY KEY,
+        label TEXT NOT NULL,
+        spellings TEXT NOT NULL DEFAULT '[]',
+        line_count INTEGER NOT NULL DEFAULT 0,
+        recipe_count INTEGER NOT NULL DEFAULT 0,
+        ignored INTEGER NOT NULL DEFAULT 0
+    );
+
+    -- Name keys a person said are different things (lemon, lemon juice). a < b.
+    CREATE TABLE name_distinct (
+        a TEXT NOT NULL,
+        b TEXT NOT NULL,
+        PRIMARY KEY (a, b),
+        CHECK (a < b)
+    );
+
+    -- Rewrites a person approved, by exact source form and result. A later occurrence
+    -- is applied without asking only if every column matches.
+    --   kind 'ingredient': extra is the ingredient's note, bare_quantity whether its
+    --     quantity was a bare number (so the unit could join it). kind 'line': extra is
+    --     the line's details, bare_quantity 0.
+    CREATE TABLE rename_approval (
+        kind TEXT NOT NULL CHECK (kind IN ('ingredient', 'line')),
+        name TEXT NOT NULL,
+        extra TEXT NOT NULL,
+        bare_quantity INTEGER NOT NULL,
+        new_name TEXT NOT NULL,
+        unit TEXT NOT NULL,
+        style TEXT NOT NULL,
+        PRIMARY KEY (kind, name, extra, bare_quantity, new_name, unit, style)
+    );
+
+    -- Every rewrite written to AnyList, with the full old and new fields as JSON.
+    CREATE TABLE rename_log (
+        id INTEGER PRIMARY KEY,
+        at TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        target TEXT NOT NULL,
+        place TEXT NOT NULL,
+        old TEXT NOT NULL,
+        new TEXT NOT NULL
+    );
+    """,
 ]
 
 
