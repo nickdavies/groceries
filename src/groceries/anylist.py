@@ -45,6 +45,10 @@ class ListBackend(Protocol):
         """Make each line's stores exactly the named set, creating missing stores."""
         ...
 
+    async def create_store(self, name: str) -> None:
+        """Add a store to the list if it doesn't have one by that name."""
+        ...
+
 
 def _quantity(item) -> str:
     if item.HasField("quantityPb") and quantity_not_empty(item.quantityPb):
@@ -83,16 +87,25 @@ class AnyListBackend:
         ordered = sorted(stores.values(), key=lambda s: s.sortIndex)
         return Snapshot(lines=lines, stores=[s.name for s in ordered])
 
-    async def set_stores(self, changes: Mapping[str, frozenset[str]]) -> None:
-        list_id = self._list().identifier
+    async def _ensure_stores(self, list_id: str, names: set[str]) -> dict[str, str]:
+        """Store name -> id for the list, creating any of `names` it lacks (unflushed)."""
         by_name = {s.name: sid for sid, s in self._store_map(list_id).items()}
-        for name in sorted(set().union(*changes.values()) - by_name.keys()):
+        for name in sorted(names - by_name.keys()):
             log.info("creating AnyList store %r", name)
             sid = uuid4_hex()
             await self._client.lists.save_store(
                 list_id, PBStore(identifier=sid, name=name), is_new=True, flush=False
             )
             by_name[name] = sid
+        return by_name
+
+    async def create_store(self, name: str) -> None:
+        await self._ensure_stores(self._list().identifier, {name})
+        await self._client.flush()
+
+    async def set_stores(self, changes: Mapping[str, frozenset[str]]) -> None:
+        list_id = self._list().identifier
+        by_name = await self._ensure_stores(list_id, set().union(*changes.values()))
         for line_id, names in changes.items():
             item = self._client.lists.item(list_id, line_id)
             if item is None:

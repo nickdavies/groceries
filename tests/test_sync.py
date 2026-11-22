@@ -133,6 +133,8 @@ def test_clearing_stores_in_anylist_clears_the_item(conn):
     run(sync(conn, fake))
     assert item_stores(conn, item_id) == set()
     assert preferred(conn, item_id) is None
+    # Not "anywhere": that's only ever an explicit choice in the app.
+    assert conn.execute("SELECT anywhere FROM item WHERE id = ?", (item_id,)).fetchone()[0] == 0
 
 
 def test_ui_change_is_pushed_to_open_lines(conn):

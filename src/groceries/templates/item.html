@@ -21,6 +21,7 @@
   <label>Name <input name="name" value="{{ item.name }}" required></label>
   <label class="check"><input type="checkbox" name="hand_pick" value="true" {{ 'checked' if item.hand_pick }}>
     Hand-pick in person (never ordered online)</label>
+  <label>Note <input name="note" value="{{ item.note }}" class="wide" placeholder="e.g. the coffee shop on Tennyson"></label>
   <button class="small">Save</button>
 </form>
 
@@ -38,8 +39,8 @@
       </tr>
     {% endfor %}
       <tr>
-        <td class="hint">No stores</td>
-        <td><input type="radio" name="preferred" value="" {{ 'checked' if not stores|selectattr('preferred')|list }}></td>
+        <td>Anywhere / no preference <span class="hint">(left unset in AnyList)</span></td>
+        <td><input type="radio" name="preferred" value=":anywhere" {{ 'checked' if item.anywhere and not stores|selectattr('allowed')|list }}></td>
         <td></td>
       </tr>
     </tbody>

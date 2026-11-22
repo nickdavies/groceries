@@ -161,8 +161,76 @@ def test_search_links_are_editable(env):
     client.post("/sync")
     ng = sid(conn, "Natural Grocers")
     assert "Search Natural Grocers" not in client.get("/").text
-    client.post("/settings/search-links", data={f"search_url_{ng}": "https://ng.example/s/{}"})
+    client.post("/settings/stores", data={f"search_url_{ng}": "https://ng.example/s/{}"})
     assert "https://ng.example/s/flax" in client.get("/").text
+
+
+def test_anywhere_is_explicit_and_leaves_anylist_unset(env):
+    client, conn, fake = env
+    fake.add("a", "Shower rod")
+    client.post("/sync")
+    client.post("/lines/a/store", data={"store": ""})  # "Choose…" does nothing
+    assert "Shower rod" in section(client.get("/").text, "No store yet")
+
+    client.post("/lines/a/store", data={"store": ":anywhere"})
+    page = client.get("/").text
+    assert "No store yet" not in page
+    assert "Anywhere" in section(page, "In person (1)")
+    assert fake.stores_of("a") == set() and fake.writes == []
+
+    fake.set_by_hand("a", "Costco")  # a store set later in AnyList wins
+    client.post("/sync")
+    fake.set_by_hand("a")  # and clearing it there goes back to the burndown
+    client.post("/sync")
+    assert "Shower rod" in section(client.get("/").text, "No store yet")
+
+
+def test_anywhere_on_the_item_page(env):
+    client, conn, fake = env
+    fake.add("a", "coffee", "Costco")
+    client.post("/sync")
+    item = f"/items/{item_of(conn, 'a')}"
+    client.post(f"{item}/stores", data={})  # nothing chosen: no change
+    assert fake.stores_of("a") == {"Costco"}
+    client.post(f"{item}/stores", data={"preferred": ":anywhere"})
+    assert fake.stores_of("a") == set()
+    assert "Anywhere" in client.get("/items").text
+
+
+def test_new_store_from_the_burndown_and_notes(env):
+    client, conn, fake = env
+    fake.add("a", "Rhum agricole")
+    client.post("/sync")
+    client.post("/lines/a/store", data={"new_store": "Argonaut"})
+    assert "Argonaut" in fake.stores
+    assert fake.stores_of("a") == {"Argonaut"}
+    kind = conn.execute("SELECT kind FROM store WHERE name = 'Argonaut'").fetchone()[0]
+    assert kind == "offline"
+
+    item = f"/items/{item_of(conn, 'a')}"
+    client.post(item, data={"name": "Rhum agricole", "note": "Ask for the Clément"})
+    page = section(client.get("/").text, "In person (1)")
+    assert "Argonaut" in page and "Ask for the Clément" in page
+
+
+def test_store_type_can_change(env):
+    client, conn, fake = env
+    fake.add("a", "kimchi", "H-Mart")
+    client.post("/sync")
+    hmart = sid(conn, "H-Mart")
+    assert "kimchi" in section(client.get("/").text, "In person")
+    client.post("/settings/stores", data={f"kind_{hmart}": "manual"})
+    assert "kimchi" in section(client.get("/").text, "H-Mart (1)")
+    ks = sid(conn, "King Soopers")
+    client.post("/settings/stores", data={f"kind_{ks}": "offline"})  # Kroger's type is fixed
+    assert conn.execute("SELECT kind FROM store WHERE id = ?", (ks,)).fetchone()[0] == "kroger"
+
+
+def test_add_store_from_settings(env):
+    client, conn, fake = env
+    client.post("/stores", data={"name": "Target", "kind": "manual"})
+    assert "Target" in fake.stores
+    assert "Target (0)" in client.get("/").text
 
 
 def test_every_page_renders(env):

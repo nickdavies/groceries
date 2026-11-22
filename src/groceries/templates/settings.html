@@ -46,20 +46,43 @@
 <p class="hint">Kroger API credentials aren't configured.</p>
 {% endif %}
 
-<h2>Store search links</h2>
-<p class="hint">Used for list items with no product yet. Put <code>{}</code> where the search words go. Leave blank for no link.</p>
-<form method="post" action="/settings/search-links">
+<h2>Stores</h2>
+<p class="hint">"Order online" stores get a section on the list with product links. "In person" stores' items are listed under In person.
+  The search link is used for items with no product yet: put <code>{}</code> where the search words go.</p>
+<form method="post" action="/settings/stores">
   <table>
+    <thead><tr><th>Store</th><th>Type</th><th>Search link</th><th>Items</th></tr></thead>
     <tbody>
     {% for s in stores %}
       <tr>
         <td>{{ s.name }}</td>
+        <td>
+          {% if s.kind == 'kroger' %}Order online (Kroger)
+          {% else %}
+          <select name="kind_{{ s.id }}">
+            <option value="manual" {{ 'selected' if s.kind == 'manual' }}>Order online</option>
+            <option value="offline" {{ 'selected' if s.kind == 'offline' }}>In person</option>
+          </select>
+          {% endif %}
+        </td>
         <td><input name="search_url_{{ s.id }}" value="{{ s.search_url or '' }}" class="wide"
                    placeholder="https://example.com/search?q={}"></td>
+        <td>{{ s.items }}</td>
       </tr>
     {% endfor %}
     </tbody>
   </table>
-  <button class="small">Save links</button>
+  <button class="small">Save stores</button>
+</form>
+
+<h3>Add a store</h3>
+<p class="hint">It's added to the AnyList list too.</p>
+<form method="post" action="/stores" class="inline">
+  <input name="name" placeholder="Store name" required>
+  <select name="kind">
+    <option value="offline">In person</option>
+    <option value="manual">Order online</option>
+  </select>
+  <button class="small">Add store</button>
 </form>
 {% endblock %}

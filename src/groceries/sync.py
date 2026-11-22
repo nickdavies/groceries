@@ -92,10 +92,19 @@ def item_stores(conn: sqlite3.Connection, item_id: int) -> frozenset[str]:
 
 
 def set_item_stores(
-    conn: sqlite3.Connection, item_id: int, names: Iterable[str], preferred: str | None = None
+    conn: sqlite3.Connection,
+    item_id: int,
+    names: Iterable[str],
+    preferred: str | None = None,
+    anywhere: bool = False,
 ) -> None:
     """Replace an item's store set. With no `preferred` given, the current preferred
-    store is kept if it is still in the set, else the first store in store order."""
+    store is kept if it is still in the set, else the first store in store order.
+
+    `anywhere` is only ever passed by an explicit choice in the app. Any other change,
+    including stores cleared in AnyList, leaves the item unmarked, so an item with no
+    stores goes back to the "No store yet" list.
+    """
     names = set(names)
     if preferred is None:
         row = conn.execute(
@@ -115,6 +124,7 @@ def set_item_stores(
         "INSERT INTO item_store (item_id, store_id, preferred) VALUES (?, ?, ?)",
         [(item_id, r["id"], int(r["name"] == preferred)) for r in rows],
     )
+    conn.execute("UPDATE item SET anywhere = ? WHERE id = ?", (int(anywhere and not rows), item_id))
 
 
 def _mirror_stores(conn: sqlite3.Connection, names: list[str]) -> None:

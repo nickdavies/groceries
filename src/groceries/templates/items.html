@@ -11,7 +11,7 @@
       <td><a href="/items/{{ i.id }}">{{ i.name }}</a>{% if i.hand_pick %} <span class="tag">hand-pick</span>{% endif %}</td>
       <td>{{ i.aliases or '' }}</td>
       <td>
-        {% if not i.preferred %}—
+        {% if not i.preferred %}{{ 'Anywhere' if i.anywhere else '—' }}
         {% elif i.others > 0 %}{{ i.preferred }} <span class="hint">+{{ i.others }}</span>
         {% else %}Only at {{ i.preferred }}{% endif %}
       </td>

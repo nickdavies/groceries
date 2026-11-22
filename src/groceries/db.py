@@ -174,6 +174,14 @@ MIGRATIONS = [
     UPDATE store SET search_url = 'https://totalbev.com/shop/?ch-query={}'
         WHERE name = 'Total Beverage';
     """,
+    """
+    -- anywhere: a person decided the item has no particular store ("wherever we pass",
+    --   a one-off shop). AnyList leaves its lines unset. It only means anything while
+    --   the item has no stores, and setting a store clears it.
+    -- note: free text shown next to the item's lines, e.g. which coffee shop.
+    ALTER TABLE item ADD COLUMN anywhere INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE item ADD COLUMN note TEXT NOT NULL DEFAULT '';
+    """,
 ]
 
 

@@ -56,6 +56,10 @@ class FakeList:
     async def snapshot(self) -> Snapshot:
         return Snapshot(list(self.lines.values()), list(self.stores))
 
+    async def create_store(self, name: str) -> None:
+        if name not in self.stores:
+            self.stores.append(name)
+
     async def set_stores(self, changes) -> None:
         if self.fail_writes:
             raise ConnectionError("AnyList unreachable")

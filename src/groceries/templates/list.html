@@ -13,6 +13,8 @@
   {% endif %}
 {% endmacro %}
 
+{% macro note(line) %}{% if line.note %}<div class="hint">{{ line.note }}</div>{% endif %}{% endmacro %}
+
 {% block content %}
 <div class="bar">
   <h1>Shopping list</h1>
@@ -22,15 +24,20 @@
 {% if view.unassigned %}
 <section class="burndown">
   <h2>No store yet ({{ view.unassigned|length }})</h2>
-  <p class="hint">Pick where each comes from. It's saved on the item and in AnyList.</p>
+  <p class="hint">Pick where each comes from. It's saved on the item and in AnyList. "Anywhere" leaves it unset in AnyList.</p>
   <table><tbody>
   {% for lv in view.unassigned %}
     {% set l = lv.row %}
     <tr>
-      <td><a href="/items/{{ l.item_id }}">{{ l.name }}</a>{% if l.quantity %} <span class="qty">× {{ l.quantity }}</span>{% endif %}</td>
+      <td><a href="/items/{{ l.item_id }}">{{ l.name }}</a>{% if l.quantity %} <span class="qty">× {{ l.quantity }}</span>{% endif %}{{ note(l) }}</td>
       <td>
         <form method="post" action="/lines/{{ l.anylist_item_id }}/store" class="inline">
-          <select name="store">{% for s in all_stores %}<option>{{ s.name }}</option>{% endfor %}</select>
+          <select name="store">
+            <option value="" selected>Choose…</option>
+            <option value=":anywhere">Anywhere / no preference</option>
+            {% for s in all_stores %}<option>{{ s.name }}</option>{% endfor %}
+          </select>
+          <input name="new_store" placeholder="or a new store" size="14">
           <button class="small">Set</button>
         </form>
       </td>
@@ -60,6 +67,7 @@
       <td><input type="checkbox" name="ids" value="{{ l.anylist_item_id }}" form="ordered-{{ g.store.id }}"></td>
       <td>
         <a href="/items/{{ l.item_id }}" class="name">{{ l.name }}</a>{% if l.quantity %} <span class="qty">× {{ l.quantity }}</span>{% endif %}
+        {{ note(l) }}
         <div class="links">{{ product_links(g.store, l, lv.products) }}</div>
         {% for s, products in lv.also %}
         <details class="also">
@@ -88,7 +96,7 @@
   <table><tbody>
   {% for l, store in view.in_person %}
     <tr>
-      <td><a href="/items/{{ l.item_id }}">{{ l.name }}</a>{% if l.quantity %} <span class="qty">× {{ l.quantity }}</span>{% endif %}</td>
+      <td><a href="/items/{{ l.item_id }}">{{ l.name }}</a>{% if l.quantity %} <span class="qty">× {{ l.quantity }}</span>{% endif %}{{ note(l) }}</td>
       <td class="hint">{{ store }}</td>
     </tr>
   {% endfor %}

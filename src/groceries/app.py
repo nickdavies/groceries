@@ -25,6 +25,9 @@ from .kroger import Kroger, Location
 
 log = logging.getLogger(__name__)
 HERE = Path(__file__).parent
+# Form value for "anywhere / no preference". Empty strings can't carry it: FastAPI turns
+# an empty optional form field into its default.
+ANYWHERE = ":anywhere"
 templates = Jinja2Templates(directory=HERE / "templates")
 
 
@@ -57,12 +60,13 @@ class Services:
         """Change an item's stores from the UI and write them to its AnyList lines.
 
         Syncing first adopts any edits people made in AnyList since the last sync, so
-        this change is applied on top of them and is the latest.
+        this change is applied on top of them and is the latest. Every caller is a
+        person choosing in the UI, so no stores means "anywhere / no preference".
         """
         async with self.lock:
             if not await self._sync_locked():
                 return
-            sync.set_item_stores(self.conn, item_id, names, preferred)
+            sync.set_item_stores(self.conn, item_id, names, preferred, anywhere=not names)
             try:
                 await sync.push_item_stores(self.conn, self.backend, item_id)
             except Exception as e:
@@ -73,6 +77,17 @@ class Services:
         async with self.lock:
             sync.merge_items(self.conn, source, target)
             await self._sync_locked()
+
+    async def add_store(self, name: str, kind: str) -> None:
+        """Create a store here and on the AnyList list, so it can be picked in both."""
+        async with self.lock:
+            self.conn.execute(
+                "INSERT INTO store (name, kind, sort) "
+                "SELECT ?, ?, coalesce(max(sort) + 1, 0) FROM store WHERE true "
+                "ON CONFLICT (name) DO NOTHING",
+                (name, kind),
+            )
+            await self.backend.create_store(name)
 
 
 async def _sync_loop(svc: Services, interval: float) -> None:
@@ -158,15 +173,17 @@ def build_list(conn) -> ListView:
     """Place every open line once.
 
     A line goes under its preferred store: the item's, if that is one of the line's
-    AnyList stores, else the first of them in store order. Hand-pick items, and lines
-    whose preferred store isn't one we order from online, go under "In person".
+    AnyList stores, else the first of them in store order. Hand-pick items, lines whose
+    preferred store isn't one we order from online, and items a person marked as
+    "anywhere" go under "In person". Other lines with no store are the burndown list.
     """
     stores = conn.execute("SELECT * FROM store ORDER BY sort").fetchall()
     view = ListView(stores=[StoreGroup(s) for s in stores if s["kind"] != "offline"])
     groups = {g.store["id"]: g for g in view.stores}
     rows = conn.execute(
         """
-        SELECT l.*, coalesce(i.hand_pick, 0) AS hand_pick, s.name AS ordered_from_name,
+        SELECT l.*, coalesce(i.hand_pick, 0) AS hand_pick, coalesce(i.anywhere, 0) AS anywhere,
+          coalesce(i.note, '') AS note, s.name AS ordered_from_name,
           (SELECT x.store_id FROM item_store x WHERE x.item_id = l.item_id AND x.preferred)
             AS preferred_id
         FROM list_line l
@@ -182,7 +199,10 @@ def build_list(conn) -> ListView:
         names = set(json.loads(row["stores"]))
         at = [s for s in stores if s["name"] in names]
         if not at:
-            view.unassigned.append(LineView(row))
+            if row["anywhere"]:
+                view.in_person.append((row, "Anywhere"))
+            else:
+                view.unassigned.append(LineView(row))
             continue
         primary = next((s for s in at if s["id"] == row["preferred_id"]), at[0])
         if row["hand_pick"] or primary["id"] not in groups:
@@ -247,15 +267,30 @@ def _routes(app: FastAPI) -> None:
         return _back(request)
 
     @app.post("/lines/{line_id}/store")
-    async def set_line_store(request: Request, line_id: str, store: Annotated[str, Form()]):
-        """Give an unassigned line's item a store. The line gets it in AnyList too."""
+    async def set_line_store(
+        request: Request,
+        line_id: str,
+        store: Annotated[str, Form()] = "",
+        new_store: Annotated[str, Form()] = "",
+    ):
+        """Decide where an unassigned line's item comes from, written to AnyList too.
+
+        `store` is an existing store's name, or ANYWHERE for "no preference". A
+        `new_store` name creates that store (in person) and uses it.
+        """
         svc = _svc(request)
         row = svc.conn.execute(
             "SELECT item_id FROM list_line WHERE anylist_item_id = ?", (line_id,)
         ).fetchone()
         if row is None or row["item_id"] is None:
             raise HTTPException(404)
-        await svc.set_item_stores(row["item_id"], {store}, store)
+        if new_store.strip():
+            store = new_store.strip()
+            await svc.add_store(store, "offline")
+        if store == ANYWHERE:
+            await svc.set_item_stores(row["item_id"], set(), None)
+        elif store:
+            await svc.set_item_stores(row["item_id"], {store}, store)
         return _back(request)
 
     @app.get("/items")
@@ -359,10 +394,11 @@ def _routes(app: FastAPI) -> None:
         item_id: int,
         name: Annotated[str, Form()],
         hand_pick: Annotated[bool, Form()] = False,
+        note: Annotated[str, Form()] = "",
     ):
         _svc(request).conn.execute(
-            "UPDATE item SET name = ?, hand_pick = ? WHERE id = ?",
-            (name.strip(), int(hand_pick), item_id),
+            "UPDATE item SET name = ?, hand_pick = ?, note = ? WHERE id = ?",
+            (name.strip(), int(hand_pick), note.strip(), item_id),
         )
         return RedirectResponse(f"/items/{item_id}", status_code=303)
 
@@ -373,10 +409,15 @@ def _routes(app: FastAPI) -> None:
         stores: Annotated[list[str] | None, Form()] = None,
         preferred: Annotated[str | None, Form()] = None,
     ):
+        """`preferred` is a store name, or ANYWHERE for an explicit "no preference"."""
         names = set(stores or [])
-        if preferred:
+        if preferred == ANYWHERE:
+            names, preferred = set(), None
+        elif preferred:
             names.add(preferred)
-        await _svc(request).set_item_stores(item_id, names, preferred or None)
+        elif not names:
+            return RedirectResponse(f"/items/{item_id}", status_code=303)  # nothing chosen
+        await _svc(request).set_item_stores(item_id, names, preferred)
         return RedirectResponse(f"/items/{item_id}", status_code=303)
 
     @app.post("/items/{item_id}/merge")
@@ -448,7 +489,10 @@ def _routes(app: FastAPI) -> None:
                 log.exception("kroger location lookup failed")
                 error = f"{type(e).__name__}: {e}"
         stores = svc.conn.execute(
-            "SELECT * FROM store WHERE kind != 'offline' ORDER BY sort"
+            """
+            SELECT s.*, (SELECT count(*) FROM item_store x WHERE x.store_id = s.id) AS items
+            FROM store s ORDER BY s.kind = 'offline', s.sort
+            """
         ).fetchall()
         return _render(
             request,
@@ -476,8 +520,12 @@ def _routes(app: FastAPI) -> None:
         )
         return RedirectResponse("/settings", status_code=303)
 
-    @app.post("/settings/search-links")
-    async def set_search_links(request: Request):
+    @app.post("/settings/stores")
+    async def update_stores(request: Request):
+        """Each store's type (order online vs in person) and search link.
+
+        King Soopers' 'kroger' type is fixed: it is the one store with an API.
+        """
         conn = _svc(request).conn
         form = await request.form()
         for key, value in form.items():
@@ -486,6 +534,22 @@ def _routes(app: FastAPI) -> None:
                     "UPDATE store SET search_url = ? WHERE id = ?",
                     (str(value).strip() or None, int(key.removeprefix("search_url_"))),
                 )
+            elif key.startswith("kind_") and value in ("manual", "offline"):
+                conn.execute(
+                    "UPDATE store SET kind = ? WHERE id = ? AND kind != 'kroger'",
+                    (value, int(key.removeprefix("kind_"))),
+                )
+        return RedirectResponse("/settings", status_code=303)
+
+    @app.post("/stores")
+    async def add_store(
+        request: Request,
+        name: Annotated[str, Form()],
+        kind: Annotated[str, Form()] = "offline",
+    ):
+        if kind not in ("manual", "offline") or not name.strip():
+            raise HTTPException(400)
+        await _svc(request).add_store(name.strip(), kind)
         return RedirectResponse("/settings", status_code=303)
 
 
