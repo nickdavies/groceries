@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from groceries import db
+from groceries.anylist import IngredientText
 from groceries.app import Services, create_app
 
 from .fakes import FakeKroger, FakeList
@@ -406,3 +407,21 @@ def test_names_show_where_each_name_is_used(env):
 
     suggestions = section(client.get("/names").text, "Contains another name")
     assert "in Bread" in suggestions  # "bread flour" contains "Flour"
+
+
+def test_review_shows_the_fields_and_flags_stale_display_text(env):
+    client, conn, fake = env
+    fake.add("a", "Avocados", "King Soopers")
+    fake.add_recipe("r", "Burrito Bowls", ("i", "2", "Avocadoes", "sliced"))
+    # Edited on Android: the fields changed, the stored display text didn't.
+    fake.recipes["r"][1]["i"] = IngredientText("2", "Avocadoes", "sliced", "1 Avocado, sliced")
+    client.post("/sync")
+    avocados = conn.execute("SELECT id FROM item WHERE name = 'Avocados'").fetchone()[0]
+    client.post("/names/map", data={"key": "avocadoes", "target_id": avocados})
+
+    review = " ".join(
+        re.sub(r"<[^>]+>", " ", section(client.get("/names").text, "Needs review")).split()
+    )
+    now, after = review.split("2 Avocadoes, sliced", 1)[1].split("2 Avocados, sliced", 1)
+    assert "doesn't match the fields: “1 Avocado, sliced”" in now
+    assert "doesn't match" not in after

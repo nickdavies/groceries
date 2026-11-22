@@ -93,7 +93,8 @@ def _with_unit(quantity: str, unit: str) -> str:
     return f"{quantity} {unit_for_amount(unit, amount_as_float(amount))}"
 
 
-def _compose(quantity: str, name: str, note: str) -> str:
+def compose(quantity: str, name: str, note: str) -> str:
+    """The text a recipe shows for these fields, as AnyList's apps build it."""
     text = full_ingredient_string(PB.PBIngredient(quantity=quantity, name=name, note=note))
     return text.strip()
 
@@ -131,7 +132,7 @@ def plan(conn: sqlite3.Connection, snap: Snapshot) -> list[Change]:
         quantity = _with_unit(old.quantity, ref["unit"]) if ref["unit"] and bare else old.quantity
         note = combine(ref["style"], old.note)
         name = ref["item_name"]
-        new = IngredientText(quantity, name, note, _compose(quantity, name, note))
+        new = IngredientText(quantity, name, note, compose(quantity, name, note))
         form = Form("ingredient", old.name, old.note, bare, name, ref["unit"], ref["style"])
         reason = "an ordered line comes from this recipe" if ing.recipe_id in held else ""
         target = f"{ing.recipe_id}/{ing.id}"

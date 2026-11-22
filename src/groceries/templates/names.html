@@ -1,8 +1,13 @@
 {% extends "base.html" %}
 {% block title %}Names{% endblock %}
 
-{% macro ingredient_text(t) %}<code>{{ t.raw or '(empty)' }}</code>
-  <div class="hint">quantity “{{ t.quantity }}” · name “{{ t.name }}” · note “{{ t.note }}”</div>{% endmacro %}
+{# The text the apps show, built from the fields. A recipe also stores its own display
+   text, which Android doesn't update on edit, so it can be stale: flag it when it differs. #}
+{% macro ingredient_text(t) %}{% set shown = compose(t.quantity, t.name, t.note) %}<code>{{ shown or '(empty)' }}</code>
+  <div class="hint">quantity “{{ t.quantity }}” · name “{{ t.name }}” · note “{{ t.note }}”</div>
+  {%- if t.raw.strip() != shown %}
+  <div class="hint stale">Stored display text doesn't match the fields: “{{ t.raw }}”</div>
+  {%- endif %}{% endmacro %}
 
 {% macro line_text(t) %}<code>{{ t.name }}</code>{% if t.details %} <span class="hint">details “{{ t.details }}”</span>{% endif %}{% endmacro %}
 

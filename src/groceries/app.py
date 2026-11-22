@@ -820,3 +820,4 @@ def _link_product(conn, item_id: int, product_id: int) -> None:
 
 
 templates.env.globals["search_link"] = search_link
+templates.env.globals["compose"] = rename.compose
