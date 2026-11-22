@@ -10,12 +10,17 @@ but isn't exactly item.name becomes a planned Change:
   - an ingredient's display text is rebuilt as "{quantity} {name}, {note}", the form
     AnyList's own editor writes. Scaling uses `quantity`, never this text.
 
+Lines added from a recipe are left alone: AnyList ignores renames of those lines (it
+acknowledges the write but keeps the name), and rewriting the recipe already moves or
+relinks them.
+
 A change is written only if its Form was approved on /names. A Form is the exact source
 (old name, note or details, whether the quantity was a bare number) plus the exact
 mapping (new name, unit, style), so a different note, a different spelling or an edited
 mapping all wait for review again. Ingredient changes are held back while an ordered
 line comes from their recipe: AnyList moves that line to a new id, which would drop its
-"On the way" state.
+"On the way" state. Any change already written once whose target still has the old text
+is held back too, so a write AnyList doesn't keep is never retried in a loop.
 
 Ingredients are written first, because saving a recipe makes AnyList move its open lines
 to the line for the new name, which merges same-unit lines. Lines are planned again
@@ -74,6 +79,9 @@ class Change:
     held: str = ""  # why it isn't written even once approved
 
 
+NOT_KEPT = "AnyList didn't keep this rewrite when it was written before"
+
+
 def combine(style: str, text: str) -> str:
     """`style` in front of a note or details, unless it's already there."""
     if not style or style.casefold() in text.casefold():
@@ -122,6 +130,14 @@ def plan(conn: sqlite3.Connection, snap: Snapshot) -> list[Change]:
         )
     }
     held = _held_recipes(conn, snap)
+    written = {
+        (r["target"], r["old"], r["new"])
+        for r in conn.execute("SELECT target, old, new FROM rename_log")
+    }
+
+    def not_kept(target: str, old, new) -> bool:
+        return (target, json.dumps(asdict(old)), json.dumps(asdict(new))) in written
+
     changes = []
     for ing in snap.ingredients:
         old = ing.text
@@ -134,19 +150,24 @@ def plan(conn: sqlite3.Connection, snap: Snapshot) -> list[Change]:
         name = ref["item_name"]
         new = IngredientText(quantity, name, note, compose(quantity, name, note))
         form = Form("ingredient", old.name, old.note, bare, name, ref["unit"], ref["style"])
-        reason = "an ordered line comes from this recipe" if ing.recipe_id in held else ""
         target = f"{ing.recipe_id}/{ing.id}"
+        reason = ""
+        if not_kept(target, old, new):
+            reason = NOT_KEPT
+        elif ing.recipe_id in held:
+            reason = "an ordered line comes from this recipe"
         changes.append(Change(form, target, ing.recipe_name, ref["item_id"], old, new, reason))
     for line in snap.lines:
         ref = refs.get(normalize(line.name))
-        if ref is None or line.name == ref["item_name"]:
+        if ref is None or line.name == ref["item_name"] or line.recipe_ids:
             continue
         style = ", ".join(p for p in (ref["unit"], ref["style"]) if p)
         old = LineText(line.name, line.details)
         new = LineText(ref["item_name"], combine(style, line.details))
         form = Form("line", old.name, old.details, False, new.name, ref["unit"], ref["style"])
         place = "Shared List, crossed off" if line.checked else "Shared List"
-        changes.append(Change(form, line.id, place, ref["item_id"], old, new))
+        reason = NOT_KEPT if not_kept(line.id, old, new) else ""
+        changes.append(Change(form, line.id, place, ref["item_id"], old, new, reason))
     return changes
 
 
@@ -209,7 +230,7 @@ async def apply(
         if done:
             snap = await backend.snapshot()
 
-    todo = [c for c in plan(conn, snap) if c.form.kind == "line" and c.form in ok]
+    todo = [c for c in plan(conn, snap) if c.form.kind == "line" and c.form in ok and not c.held]
     lines = 0
     if todo:
         by_id = {c.target: c for c in todo}

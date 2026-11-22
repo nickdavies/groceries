@@ -175,8 +175,8 @@ def test_an_ordered_line_holds_back_its_recipe(conn):
     assert fake.ingredient_writes == []
     held = [c for c in planned(conn, fake) if c.form.kind == "ingredient"]
     assert held[0].held
-    # The line itself keeps its id when renamed, so it is still written.
-    assert fake.lines["a"].name == "Garlic"
+    # The line came from the recipe, so it isn't renamed either: AnyList keeps its name.
+    assert fake.lines["a"].name == "garlic cloves" and fake.line_writes == []
 
 
 def test_ingredients_are_written_first_and_moved_lines_keep_the_items_stores(conn):
@@ -288,3 +288,26 @@ def test_a_unit_after_one_is_singular_and_raw_text_is_trimmed(conn):
     new = {c.target: c.new for c in planned(conn, fake)}
     assert new["r/i"].raw == "1 clove Garlic"
     assert new["r/j"].raw == "3 Eggs, Yolks only"
+
+
+def test_lines_added_from_a_recipe_are_not_renamed(conn):
+    map_name(conn, "avocadoes", item(conn, "Avocados"))
+    fake = FakeList()
+    fake.add("a", "Avocadoes", checked=True, recipes=("r",))
+    fake.add("b", "Avocadoes", checked=True)
+    assert [c.target for c in planned(conn, fake)] == ["b"]
+
+
+def test_a_rewrite_anylist_does_not_keep_is_not_retried(conn):
+    map_name(conn, "avocadoes", item(conn, "Avocados"))
+    fake = FakeList()
+    fake.add("a", "Avocadoes", checked=True)
+    fake.ignored_renames.add("a")
+    approve_all(conn, fake)
+
+    run(sync(conn, fake))
+    run(sync(conn, fake))
+    run(sync(conn, fake))
+    assert len(fake.line_writes) == 1
+    [change] = planned(conn, fake)
+    assert change.held == rename.NOT_KEPT

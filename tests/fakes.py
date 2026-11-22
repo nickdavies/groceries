@@ -39,6 +39,9 @@ class FakeList:
         self.line_writes: list[dict] = []
         self.ingredient_writes: list[dict] = []
         self.fail_writes = False
+        # Lines whose renames AnyList acknowledges but doesn't apply, like lines added
+        # from a recipe.
+        self.ignored_renames: set[str] = set()
 
     def _replace(self, line_id: str, **changes) -> None:
         line = self.lines[line_id]
@@ -104,7 +107,8 @@ class FakeList:
             line = self.lines.get(line_id)
             if line is None or LineText(line.name, line.details) != old:
                 continue
-            self._replace(line_id, name=new.name, details=new.details)
+            if line_id not in self.ignored_renames:
+                self._replace(line_id, name=new.name, details=new.details)
             done.add(line_id)
         return done
 

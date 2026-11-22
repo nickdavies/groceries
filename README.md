@@ -60,6 +60,10 @@ ordered.
     lines to the new name and merges lines with the same unit.
     - A recipe with an ordered line waits until that line is checked off, because moving
       the line would lose its "On the way" state.
+    - Lines added from a recipe are never renamed. AnyList acknowledges the rename but
+      keeps the old name, and rewriting the recipe already relinks them.
+    - A rewrite that was written once but didn't stick is held back, marked "AnyList
+      didn't keep this rewrite", and not retried.
     - Every rewrite is logged with its full old and new text.
 
 ## Develop
