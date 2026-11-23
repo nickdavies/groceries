@@ -39,14 +39,19 @@ ordered.
   - **Merge groups.** Names with the same words (once prep words and plurals are set
     aside) or a near-identical spelling start checked; names that only contain the
     group's name ("garlic powder") start unchecked. Check the ones that are the same,
-    pick or type the name to keep, and Merge… opens a step to set each one's unit and
-    style. "Not the same" and Ignore act on the checked names and stay remembered.
+    pick or type the name to keep, and Merge… opens the merge page. "Not the same" and
+    Ignore act on the checked names and stay remembered.
+  - **Merge page.** Each name's unit and style, and every change the merge makes in
+    AnyList, before and after, including respellings of the kept name itself. Editing a
+    field updates the preview in place. The final button maps the names, approves
+    exactly the changes shown, and writes them; there's no separate review step.
   - **Compounds** ("salt and pepper") and **choices** ("walnuts or chips") are listed
     separately and never suggested.
   - **All names.** `/names/all` lists every name, filterable by in an item, not in an
     item, or ignored. Each name's page shows everywhere it's used, its item, unit and
     style (typing a new item name there makes it an item of its own), ignoring, and
-    "not the same" pairs, which can be removed.
+    "not the same" pairs, which can be removed. Changing its item, unit or style goes
+    through the merge page.
   - **Mapping.** Mapping a name into an item makes the item *canonical*: its other names
     get rewritten to the item's name. Mapping another item's own name merges that item;
     moving a name that's only another item's alias just moves the alias.
@@ -60,8 +65,9 @@ ordered.
       shallot" becomes "Shallot, minced".
     - A recipe's display text is rebuilt as "{quantity} {name}, {note}", the form
       AnyList's editor writes. Scaling uses the quantity, not this text.
-  - **Review.** Each rewrite is shown with its exact before and after, and nothing is
-    written until it is approved.
+  - **Review.** Nothing is written without being shown first, with its exact before and
+    after: on the merge page, or under Needs review for anything the merge page didn't
+    cover.
     - An approval covers one exact source (name, note or details, and whether the quantity
       was a bare number) and one exact result. Later matches of that pair are written on
       sync.

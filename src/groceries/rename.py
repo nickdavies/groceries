@@ -31,6 +31,7 @@ import json
 import logging
 import sqlite3
 from collections import Counter, defaultdict
+from collections.abc import Mapping
 from dataclasses import asdict, astuple, dataclass
 from datetime import UTC, datetime
 
@@ -117,10 +118,14 @@ def _held_recipes(conn: sqlite3.Connection, snap: Snapshot) -> set[str]:
     return {rid for line in snap.lines if line.id in ordered for rid in line.recipe_ids}
 
 
-def plan(conn: sqlite3.Connection, snap: Snapshot) -> list[Change]:
-    """Every rewrite the canonical items call for, approved or not."""
+def plan(
+    conn: sqlite3.Connection, snap: Snapshot, overrides: Mapping[str, dict] | None = None
+) -> list[Change]:
+    """Every rewrite the canonical items call for, approved or not. `overrides` maps name
+    keys to mappings ({item_id, item_name, unit, style}) that aren't saved yet, to preview a
+    merge before making it."""
     refs = {
-        r["external_id"]: r
+        r["external_id"]: dict(r)
         for r in conn.execute(
             """
             SELECT r.external_id, r.unit, r.style, i.id AS item_id, i.name AS item_name
@@ -129,6 +134,7 @@ def plan(conn: sqlite3.Connection, snap: Snapshot) -> list[Change]:
             """
         )
     }
+    refs.update(overrides or {})
     held = _held_recipes(conn, snap)
     written = {
         (r["target"], r["old"], r["new"])
@@ -169,6 +175,25 @@ def plan(conn: sqlite3.Connection, snap: Snapshot) -> list[Change]:
         reason = NOT_KEPT if not_kept(line.id, old, new) else ""
         changes.append(Change(form, line.id, place, ref["item_id"], old, new, reason))
     return changes
+
+
+def preview(
+    conn: sqlite3.Connection,
+    snap: Snapshot,
+    item_id: int | None,
+    item_name: str,
+    names: list[tuple[str, str, str]],
+) -> list[Change]:
+    """The rewrites merging `names`, each (key, unit, style), into the item would make:
+    theirs, plus respellings of the item's own name, since merging makes it canonical.
+    `item_id` is None for an item that doesn't exist yet."""
+
+    def ref(unit: str, style: str) -> dict:
+        return {"item_id": item_id, "item_name": item_name, "unit": unit, "style": style}
+
+    overrides = {normalize(item_name): ref("", "")}
+    overrides |= {key: ref(unit.strip(), style.strip()) for key, unit, style in names}
+    return [c for c in plan(conn, snap, overrides) if normalize(c.form.name) in overrides]
 
 
 def approvals(conn: sqlite3.Connection) -> set[Form]:

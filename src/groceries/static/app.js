@@ -46,3 +46,33 @@ document.addEventListener("submit", async (event) => {
     button.textContent = label;
   }
 });
+
+// Merge page: editing a unit or style re-renders the page with the new values and swaps
+// in every [data-swap] element (the previews and the submit row, which carries the exact
+// rewrites to write). The submit button stays disabled until the preview matches the
+// fields, so what's written is always what was shown.
+let mergeTimer;
+document.addEventListener("input", (event) => {
+  const form = event.target.closest("form.merge-form");
+  if (!form) return;
+  form.querySelector("#merge-submit button").disabled = true;
+  clearTimeout(mergeTimer);
+  mergeTimer = setTimeout(() => refreshMerge(form), 300);
+});
+
+async function refreshMerge(form) {
+  const params = new URLSearchParams(new FormData(form));
+  params.delete("forms");
+  const url = `${form.action}?${params}`;
+  try {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(response.statusText);
+    const page = new DOMParser().parseFromString(await response.text(), "text/html");
+    for (const fresh of page.querySelectorAll("[data-swap]")) {
+      document.getElementById(fresh.id)?.replaceWith(fresh);
+    }
+    history.replaceState(null, "", url);
+  } catch {
+    location.href = url;
+  }
+}

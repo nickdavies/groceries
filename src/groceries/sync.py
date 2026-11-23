@@ -128,19 +128,24 @@ class NotAnItemName(Exception):
     """A name chosen for an item is already another item's alias."""
 
 
-def target_item(conn: sqlite3.Connection, name: str) -> int:
-    """The item to merge names into, called `name`: an item whose own name it is, or a new
-    item. It can't be another item's alias, because that would merge into the other item
-    under a different name than the one chosen."""
-    name = name.strip()
+def find_target(conn: sqlite3.Connection, name: str) -> sqlite3.Row | None:
+    """The item called `name` (by its own name), or None if there's none yet. A name that
+    is another item's alias can't be a target: merging would go into that item under a
+    different name than the one chosen."""
     row = conn.execute(
         "SELECT i.id, i.name FROM external_ref r JOIN item i ON i.id = r.item_id "
         "WHERE r.source = 'anylist' AND r.external_id = ?",
         (normalize(name),),
     ).fetchone()
     if row is not None and normalize(row["name"]) != normalize(name):
-        raise NotAnItemName(f"“{name}” is already a name of the item “{row['name']}”.")
-    return row["id"] if row is not None else item_for_name(conn, name)
+        raise NotAnItemName(f"“{name.strip()}” is already a name of the item “{row['name']}”.")
+    return row
+
+
+def target_item(conn: sqlite3.Connection, name: str) -> int:
+    """The item to merge names into, called `name`, created if there is none."""
+    row = find_target(conn, name)
+    return row["id"] if row is not None else item_for_name(conn, name.strip())
 
 
 def merge_items(conn: sqlite3.Connection, source: int, target: int) -> None:

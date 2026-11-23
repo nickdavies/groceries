@@ -117,9 +117,14 @@ form.fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(12em
 form.inline-button { display: inline; margin: 0; }
 form.fields button { justify-self: start; }
 table.names td:first-child { width: 30%; }
-table.merge input { width: 100%; }
-table.merge td:nth-child(2) { width: 8em; }
-table.merge td:nth-child(3) { width: 40%; }
+/* Merge page: a name and its unit and style fields on one row above its before/after
+   table; on narrow screens the fields drop below the name. */
+.merge-form { display: flex; flex-direction: column; gap: var(--wa-space-l); }
+.merge-name { display: grid; grid-template-columns: minmax(0, 1fr) 8em 16em; gap: var(--wa-space-s); align-items: end; }
+.merge-name label { display: flex; flex-direction: column; gap: var(--wa-space-2xs); margin: 0; }
+.merge-name input { width: 100%; }
+@media (max-width: 700px) { .merge-name { grid-template-columns: 1fr 1fr; } .merge-name > div { grid-column: 1 / -1; } }
+table.changes td { vertical-align: top; }
 .hint.stale { color: var(--wa-color-warning-on-quiet); }
 .results img { width: 48px; height: 48px; object-fit: contain; }
 

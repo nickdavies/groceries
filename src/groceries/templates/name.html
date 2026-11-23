@@ -32,12 +32,12 @@
 <p class="hint">To rename it, rename the item. To leave its spellings alone, use Stop rewriting under Needs review or untick “Use this name in AnyList” on the item.</p>
 {% else %}
 <datalist id="item-names">{% for i in items %}<option value="{{ i.name }}">{% endfor %}</datalist>
-<form method="post" action="/names/map" class="fields">
-  <input type="hidden" name="key" value="{{ key }}">
-  <label>Item <input name="target_name" value="{{ found.item_name if found else '' }}" list="item-names" placeholder="an item, or a new name" required></label>
-  <label>Unit <input name="unit" value="{{ found.unit if found else '' }}" placeholder="e.g. cloves"></label>
-  <label>Style <input name="style" value="{{ found.style if found else '' }}" placeholder="e.g. minced"></label>
-  <button class="wa-brand">{{ 'Save' if found else 'Map' }}</button>
+<form method="get" action="/names/merge" class="fields">
+  <input type="hidden" name="keys" value="{{ key }}">
+  <label>Item <input name="target" value="{{ found.item_name if found else '' }}" list="item-names" placeholder="an item, or a new name" required></label>
+  <label>Unit <input name="units" value="{{ found.unit if found else '' }}" placeholder="e.g. cloves"></label>
+  <label>Style <input name="styles" value="{{ found.style if found else '' }}" placeholder="e.g. minced"></label>
+  <button class="wa-brand">Preview…</button>
 </form>
 {% if found %}
 <form method="post" action="/names/unmap">

@@ -86,12 +86,17 @@ class Services:
             sync.make_canonical(self.conn, target)
             await self._sync_locked()
 
-    async def map_names(self, target: int, names: list[tuple[str, str, str]]) -> None:
-        """Map AnyList names, each (key, unit, style), into an item. Their rewrites then
-        wait on /names for review, unless the exact same rewrite was approved before."""
+    async def merge(
+        self, target: str, names: list[tuple[str, str, str]], forms: list[rename.Form]
+    ) -> None:
+        """Merge AnyList names, each (key, unit, style), into the item called `target`
+        (created if there is none), approve exactly the rewrites the merge page showed, and
+        write them. Anything else they call for waits on /names for review."""
         async with self.lock:
+            item_id = sync.target_item(self.conn, target)
             for key, unit, style in names:
-                sync.map_name(self.conn, key, target, unit, style)
+                sync.map_name(self.conn, key, item_id, unit, style)
+            rename.approve(self.conn, forms)
             await self._sync_locked()
 
     async def approve(self, forms: list[rename.Form]) -> None:
@@ -344,6 +349,19 @@ def name_nodes(conn) -> list[suggest.Name]:
         if key not in nodes:
             nodes[key] = suggest.Name(key, i["name"], 0, i["id"], i["name"], True, i["canonical"])
     return list(nodes.values())
+
+
+@dataclass
+class MergeEntry:
+    """A name on the merge page, with the rewrites merging it makes."""
+
+    key: str
+    label: str
+    found: sqlite3.Row | None  # its current mapping, if any
+    own: bool  # it is that item's own name, so merging moves the whole item
+    unit: str
+    style: str
+    changes: list = field(default_factory=list)
 
 
 @dataclass
@@ -693,35 +711,61 @@ def _routes(app: FastAPI) -> None:
         )
 
     @app.get("/names/merge")
-    async def merge_confirm(
+    async def merge_page(
         request: Request,
         target: str,
         keys: Annotated[list[str] | None, Query()] = None,
+        units: Annotated[list[str] | None, Query()] = None,
+        styles: Annotated[list[str] | None, Query()] = None,
     ):
-        """Step two of merging a group: the unit and style for each checked name."""
+        """The last step of a merge: each name's unit and style, and every rewrite it makes
+        in AnyList, before and after. Editing a field fetches this page again and swaps in
+        the new preview (static/app.js)."""
         svc = _svc(request)
         conn = svc.conn
         target = target.strip()
         if not target:
             raise HTTPException(400, "Choose the name to merge into.")
+        try:
+            item = sync.find_target(conn, target)
+        except sync.NotAnItemName as e:
+            raise HTTPException(409, f"{e} Merge into that item, or choose another name.") from e
+        item_name = item["name"] if item else target
+        keys = [k for k in dict.fromkeys(keys or []) if k != normalize(item_name)]
+        typed = units is not None and styles is not None and len(units) == len(styles) == len(keys)
         entries = []
-        for key in dict.fromkeys(keys or []):
-            if key == normalize(target):
-                continue  # the canonical name itself
+        for i, key in enumerate(keys):
             label = name_label(conn, key)
             found = mapping(conn, key)
-            unit, style = suggest.defaults(label, target)
-            if found and normalize(found["item_name"]) == normalize(target):
+            if typed:
+                unit, style = units[i], styles[i]
+            elif found and item and found["item_id"] == item["id"]:
                 unit, style = found["unit"], found["style"]
-            entries.append((key, label, found, sync.is_own_name(conn, key), unit, style))
+            else:
+                unit, style = suggest.defaults(label, item_name)
+            entries.append(MergeEntry(key, label, found, sync.is_own_name(conn, key), unit, style))
         if not entries:
             return RedirectResponse("/names#merge", status_code=303)
+
+        changes = []
+        if svc.snapshot is not None:
+            names = [(e.key, e.unit, e.style) for e in entries]
+            changes = rename.preview(
+                conn, svc.snapshot, item["id"] if item else None, item_name, names
+            )
+        for e in entries:
+            e.changes = [c for c in changes if normalize(c.form.name) == e.key]
+        own = [c for c in changes if normalize(c.form.name) == normalize(item_name)]
+        writes = [c for c in changes if not c.held]
         return _render(
             request,
             "merge.html",
-            target=target,
-            target_exists=mapping(conn, normalize(target)) is not None,
+            target=item_name,
+            exists=item is not None,
             entries=entries,
+            own=own,
+            forms=list(dict.fromkeys(c.form for c in writes)),
+            writes=len(writes),
             sources=name_sources(svc.snapshot),
         )
 
@@ -732,36 +776,21 @@ def _routes(app: FastAPI) -> None:
         keys: Annotated[list[str], Form()],
         units: Annotated[list[str], Form()],
         styles: Annotated[list[str], Form()],
+        forms: Annotated[list[str] | None, Form()] = None,
     ):
+        """Merge the names and write the rewrites the page showed (`forms`)."""
         svc = _svc(request)
         try:
-            target_id = sync.target_item(svc.conn, target)
+            await svc.merge(
+                target,
+                list(zip(keys, units, styles, strict=True)),
+                [rename.Form.from_json(f) for f in forms or []],
+            )
         except sync.NotAnItemName as e:
             raise HTTPException(409, f"{e} Merge into that item, or choose another name.") from e
-        try:
-            await svc.map_names(target_id, list(zip(keys, units, styles, strict=True)))
         except sync.NameTaken as e:
             raise HTTPException(409, f"{e} is another item's AnyList name.") from e
-        return RedirectResponse("/names#review", status_code=303)
-
-    @app.post("/names/map")
-    async def map_name(
-        request: Request,
-        key: Annotated[str, Form()],
-        target_name: Annotated[str, Form()],
-        unit: Annotated[str, Form()] = "",
-        style: Annotated[str, Form()] = "",
-    ):
-        """Map one name into the item called `target_name`, created if there is none."""
-        svc = _svc(request)
-        try:
-            target_id = sync.target_item(svc.conn, target_name)
-            await svc.map_names(target_id, [(key, unit, style)])
-        except sync.NotAnItemName as e:
-            raise HTTPException(409, f"{e} Map into that item, or choose another name.") from e
-        except sync.NameTaken as e:
-            raise HTTPException(409, f"{e} is another item's AnyList name.") from e
-        return _back(request, "/names")
+        return RedirectResponse("/names#log", status_code=303)
 
     @app.post("/names/unmap")
     async def unmap_name(request: Request, key: Annotated[str, Form()]):

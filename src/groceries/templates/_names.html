@@ -19,6 +19,29 @@
   → <strong>“{{ f.new_name }}”</strong>{% if f.unit %}, unit “{{ f.unit }}”{% endif %}{% if f.style %}, style “{{ f.style }}”{% endif %}
 {% endmacro %}
 
+{# Planned rewrites as Where / Now / After rows. Held ones say why they aren't written. #}
+{% macro changes_table(changes) %}
+{% if changes %}
+<table class="changes">
+  <thead><tr><th>Where</th><th>Now</th><th>After</th></tr></thead>
+  <tbody>
+  {% for c in changes %}
+    <tr>
+      <td>{{ c.place }}{% if c.held %}<div class="hint stale">Not written: {{ c.held }}</div>{% endif %}</td>
+      {% if c.form.kind == 'ingredient' %}
+      <td>{{ ingredient_text(c.old) }}</td><td>{{ ingredient_text(c.new) }}</td>
+      {% else %}
+      <td>{{ line_text(c.old) }}</td><td>{{ line_text(c.new) }}</td>
+      {% endif %}
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="hint">Nothing to rewrite in AnyList right now.</p>
+{% endif %}
+{% endmacro %}
+
 {% macro name_link(key, label) %}<a href="/names/name?key={{ key|urlencode }}">{{ label }}</a>{% endmacro %}
 
 {# Where a name is used, from the last sync: line counts, then up to three recipes with the
@@ -57,21 +80,7 @@
         {% endif %}
         {{ describe(g.form) }} <span class="hint">({{ g.changes|length }} {{ 'place' if g.changes|length == 1 else 'places' }})</span>
       </span>
-      <table>
-        <thead><tr><th>Where</th><th>Now</th><th>After</th></tr></thead>
-        <tbody>
-        {% for c in g.changes %}
-          <tr>
-            <td>{{ c.place }}{% if c.held %}<div class="hint">Held: {{ c.held }}</div>{% endif %}</td>
-            {% if c.form.kind == 'ingredient' %}
-            <td>{{ ingredient_text(c.old) }}</td><td>{{ ingredient_text(c.new) }}</td>
-            {% else %}
-            <td>{{ line_text(c.old) }}</td><td>{{ line_text(c.new) }}</td>
-            {% endif %}
-          </tr>
-        {% endfor %}
-        </tbody>
-      </table>
+      {{ changes_table(g.changes) }}
       <div class="group-actions">
         {% if key != normalize(r.item.name) %}
         <button class="wa-outlined wa-danger" formaction="/names/unmap" name="key" value="{{ key }}"

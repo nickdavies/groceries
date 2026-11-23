@@ -1,32 +1,43 @@
 {% extends "base.html" %}
-{% from "_names.html" import where with context %}
+{% from "_names.html" import changes_table, where with context %}
 {% block title %}Merge into {{ target }}{% endblock %}
 
 {% block content %}
 <h1>Merge into “{{ target }}”</h1>
-<p class="hint">{% if target_exists %}“{{ target }}” is an item{% else %}This creates the item “{{ target }}”{% endif %}, and its names are rewritten to “{{ target }}” in AnyList once you approve them under Needs review. The unit joins a bare-number quantity (“3” becomes “3 cloves”); the style goes in front of the note (“minced”). Both start from the words that differ from “{{ target }}”.</p>
+<p class="hint">{% if exists %}“{{ target }}” is an item.{% else %}This creates the item “{{ target }}”.{% endif %}
+  Below is every change the merge makes in AnyList. Edit a unit or style and the preview updates. The unit joins a bare-number quantity (“3” becomes “3 cloves”); the style goes in front of the note (“minced”). Merging writes exactly what's shown.</p>
 
-<form method="post" action="/names/merge" class="panel">
+{# Elements with data-swap are replaced from a fresh render when a field changes; the
+   fields themselves stay put so typing isn't interrupted. #}
+<form method="post" action="/names/merge" class="merge-form">
   <input type="hidden" name="target" value="{{ target }}">
-  <table class="merge">
-    <thead><tr><th>Name</th><th>Unit</th><th>Style</th></tr></thead>
-    <tbody>
-    {% for key, label, found, own, unit, style in entries %}
-      <tr>
-        <td><input type="hidden" name="keys" value="{{ key }}"><strong>{{ label }}</strong>
-          <div class="hint">{{ where(key) }}</div>
-          {% if found and normalize(found.item_name) != normalize(target) %}
-          <div class="hint stale">{% if own %}Merges the item “{{ found.item_name }}”: its stores and products move here{% else %}Moves out of the item “{{ found.item_name }}”{% endif %}</div>
-          {% endif %}</td>
-        <td><input name="units" value="{{ unit }}" placeholder="e.g. cloves" size="8"></td>
-        <td><input name="styles" value="{{ style }}" placeholder="e.g. minced"></td>
-      </tr>
-    {% endfor %}
-    </tbody>
-  </table>
-  <div class="group-actions">
-    <button class="wa-brand">Merge {{ entries|length }} {{ 'name' if entries|length == 1 else 'names' }}</button>
-    <a href="/names#merge">Back</a>
+  {% for e in entries %}
+  <section class="panel">
+    <div class="merge-name">
+      <input type="hidden" name="keys" value="{{ e.key }}">
+      <div><strong>{{ e.label }}</strong> <span class="hint">{{ where(e.key) }}</span>
+        {% if e.found and e.found.item_id and e.found.item_name|lower != target|lower %}
+        <div class="hint stale">{% if e.own %}Merges the item “{{ e.found.item_name }}”: its stores and products move here{% else %}Moves out of the item “{{ e.found.item_name }}”{% endif %}</div>
+        {% endif %}</div>
+      <label>Unit <input name="units" value="{{ e.unit }}" placeholder="e.g. cloves" size="8"></label>
+      <label>Style <input name="styles" value="{{ e.style }}" placeholder="e.g. minced"></label>
+    </div>
+    <div id="preview-{{ loop.index }}" data-swap>{{ changes_table(e.changes) }}</div>
+  </section>
+  {% endfor %}
+
+  <section class="panel" id="preview-own" data-swap{% if not own %} hidden{% endif %}>
+    <div class="merge-name"><div><strong>{{ target }}</strong> <span class="hint">spelled differently: merging makes these “{{ target }}” too</span></div></div>
+    {{ changes_table(own) }}
+  </section>
+
+  <div id="merge-submit" class="group-actions" data-swap>
+    {% for f in forms %}<input type="hidden" name="forms" value="{{ f.to_json() }}">{% endfor %}
+    {% if not svc.snapshot %}<span class="hint">Sync first to see the changes; merging now only maps the names.</span>{% endif %}
+    <span class="buttons">
+      <button class="wa-brand">{% if writes %}Merge and write {{ writes }} {{ 'change' if writes == 1 else 'changes' }}{% else %}Merge{% endif %}</button>
+      <a href="/names#merge">Back</a>
+    </span>
   </div>
 </form>
 {% endblock %}
