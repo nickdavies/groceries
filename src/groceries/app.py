@@ -94,6 +94,8 @@ class Services:
         write them. Anything else they call for waits on /names for review."""
         async with self.lock:
             item_id = sync.target_item(self.conn, target)
+            # Same name in a different casing: the casing typed wins.
+            self.conn.execute("UPDATE item SET name = ? WHERE id = ?", (target.strip(), item_id))
             for key, unit, style in names:
                 sync.map_name(self.conn, key, item_id, unit, style)
             rename.approve(self.conn, forms)
@@ -730,7 +732,7 @@ def _routes(app: FastAPI) -> None:
             item = sync.find_target(conn, target)
         except sync.NotAnItemName as e:
             raise HTTPException(409, f"{e} Merge into that item, or choose another name.") from e
-        item_name = item["name"] if item else target
+        item_name = target  # the casing typed wins; merging renames the item to it
         keys = [k for k in dict.fromkeys(keys or []) if k != normalize(item_name)]
         typed = units is not None and styles is not None and len(units) == len(styles) == len(keys)
         entries = []
@@ -762,6 +764,7 @@ def _routes(app: FastAPI) -> None:
             "merge.html",
             target=item_name,
             exists=item is not None,
+            renames=item["name"] if item and item["name"] != item_name else None,
             entries=entries,
             own=own,
             forms=list(dict.fromkeys(c.form for c in writes)),
@@ -1013,4 +1016,5 @@ def _link_product(conn, item_id: int, product_id: int) -> None:
 templates.env.globals["search_link"] = search_link
 templates.env.globals["compose"] = rename.compose
 templates.env.globals["normalize"] = normalize
+templates.env.globals["title_case"] = suggest.title_case
 templates.env.globals["loads"] = json.loads

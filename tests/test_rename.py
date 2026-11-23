@@ -201,7 +201,7 @@ def test_lines_get_the_unit_and_style_in_their_details(conn):
     fake = FakeList()
     fake.add("a", "garlic cloves, minced", quantity="3", details="for the soup", checked=True)
     [change] = planned(conn, fake)
-    assert change.new == LineText("Garlic", "cloves, minced, for the soup")
+    assert change.new == LineText("Garlic", "cloves, minced, for the soup", "3")
 
 
 def test_split_off_stops_rewrites(conn):

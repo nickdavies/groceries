@@ -105,7 +105,7 @@ class FakeList:
         done = set()
         for line_id, (old, new) in changes.items():
             line = self.lines.get(line_id)
-            if line is None or LineText(line.name, line.details) != old:
+            if line is None or LineText(line.name, line.details, line.quantity) != old:
                 continue
             if line_id not in self.ignored_renames:
                 self._replace(line_id, name=new.name, details=new.details)

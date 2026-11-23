@@ -8,7 +8,8 @@
   <div class="hint stale">Stored display text doesn't match the fields: “{{ t.raw }}”</div>
   {%- endif %}{% endmacro %}
 
-{% macro line_text(t) %}<code>{{ t.name }}</code>{% if t.details %} <span class="hint">details “{{ t.details }}”</span>{% endif %}{% endmacro %}
+{% macro line_text(t) %}<code>{{ t.name }}</code>
+  <div class="hint">quantity “{{ t.quantity }}” · name “{{ t.name }}” · details “{{ t.details }}”</div>{% endmacro %}
 
 {% macro describe(f) %}
   {% if f.kind == 'ingredient' %}Recipe ingredient{% else %}List line{% endif %}

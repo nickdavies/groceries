@@ -38,10 +38,12 @@ class Line:
 
 @dataclass(frozen=True)
 class LineText:
-    """The parts of a line a canonical-name rewrite changes."""
+    """The parts of a line a canonical-name rewrite shows and checks. Only the name and
+    details are written; the quantity is shown so a preview can't hide a change to it."""
 
     name: str
     details: str
+    quantity: str = ""
 
 
 @dataclass(frozen=True)
@@ -175,7 +177,7 @@ class AnyListBackend:
         written = set()
         for line_id, (old, new) in changes.items():
             item = self._client.lists.item(list_id, line_id)
-            if item is None or LineText(item.name, item.details) != old:
+            if item is None or LineText(item.name, item.details, _quantity(item)) != old:
                 log.info("line %s changed since it was planned, skipping its rename", line_id)
                 continue
             if new.name != old.name:

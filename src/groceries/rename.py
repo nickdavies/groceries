@@ -168,8 +168,8 @@ def plan(
         if ref is None or line.name == ref["item_name"] or line.recipe_ids:
             continue
         style = ", ".join(p for p in (ref["unit"], ref["style"]) if p)
-        old = LineText(line.name, line.details)
-        new = LineText(ref["item_name"], combine(style, line.details))
+        old = LineText(line.name, line.details, line.quantity)
+        new = LineText(ref["item_name"], combine(style, line.details), line.quantity)
         form = Form("line", old.name, old.details, False, new.name, ref["unit"], ref["style"])
         place = "Shared List, crossed off" if line.checked else "Shared List"
         reason = NOT_KEPT if not_kept(line.id, old, new) else ""

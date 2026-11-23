@@ -130,3 +130,12 @@ def test_the_closest_contained_name_is_the_target():
     found = {(s.alias.label, s.target.label) for s in suggest(names, set())}
     assert ("freshly ground black pepper", "Black Pepper") in found
     assert ("Black Pepper", "Pepper") in found
+
+
+def test_title_case_capitalizes_each_word_and_keeps_the_rest():
+    from groceries.suggest import title_case
+
+    assert title_case("celery") == "Celery"
+    assert title_case("all-purpose flour") == "All-purpose Flour"
+    assert title_case("pip's lasagna") == "Pip's Lasagna"
+    assert title_case("St Elizabeth Allspice Dram") == "St Elizabeth Allspice Dram"

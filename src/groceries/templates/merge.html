@@ -4,7 +4,7 @@
 
 {% block content %}
 <h1>Merge into “{{ target }}”</h1>
-<p class="hint">{% if exists %}“{{ target }}” is an item.{% else %}This creates the item “{{ target }}”.{% endif %}
+<p class="hint">{% if renames %}Renames the item “{{ renames }}” to “{{ target }}”.{% elif exists %}“{{ target }}” is an item.{% else %}This creates the item “{{ target }}”.{% endif %}
   Below is every change the merge makes in AnyList. Edit a unit or style and the preview updates. The unit joins a bare-number quantity (“3” becomes “3 cloves”); the style goes in front of the note (“minced”). Merging writes exactly what's shown.</p>
 
 {# Elements with data-swap are replaced from a fresh render when a field changes; the

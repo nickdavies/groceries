@@ -33,8 +33,8 @@
     </ul>
     <div class="group-actions">
       <span class="target"><label for="target-{{ loop.index }}">Merge checked into</label>
-        <input id="target-{{ loop.index }}" name="target" value="{{ g.target.label }}" list="group-{{ loop.index }}" required></span>
-      <datalist id="group-{{ loop.index }}"><option value="{{ g.target.label }}">{% for s in g.suggestions %}<option value="{{ s.alias.label }}">{% endfor %}</datalist>
+        <input id="target-{{ loop.index }}" name="target" value="{{ g.target.label if g.target.canonical else title_case(g.target.label) }}" list="group-{{ loop.index }}" required></span>
+      <datalist id="group-{{ loop.index }}"><option value="{{ title_case(g.target.label) }}"><option value="{{ g.target.label }}">{% for s in g.suggestions %}<option value="{{ s.alias.label }}">{% endfor %}</datalist>
       <span class="buttons">
         <button class="wa-brand">Merge…</button>
         <button class="wa-outlined" formmethod="post" formaction="/names/distinct" formnovalidate>Not the same</button>

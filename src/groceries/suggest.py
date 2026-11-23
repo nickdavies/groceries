@@ -62,6 +62,12 @@ def stems(label: str) -> frozenset[str]:
     return frozenset(stem_words(core(label)))
 
 
+def title_case(name: str) -> str:
+    """Each word's first letter capitalized, the rest as typed: "all-purpose flour" gives
+    "All-purpose Flour", and "pip's" stays "Pip's"."""
+    return " ".join(w[:1].upper() + w[1:] for w in name.split(" "))
+
+
 def kind(label: str) -> str | None:
     """'compound' for "salt and pepper", 'choice' for "walnuts or chips", else None."""
     main = _main(label)

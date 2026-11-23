@@ -544,3 +544,27 @@ def test_review_shows_the_fields_and_flags_stale_display_text(env):
     now, after = review.split("2 Avocadoes, sliced", 1)[1].split("2 Avocados, sliced", 1)
     assert "doesn't match the fields: “1 Avocado, sliced”" in now
     assert "doesn't match" not in after
+
+
+def test_merging_into_a_title_cased_name_renames_the_item(env):
+    client, conn, fake = env
+    fake.add("a", "celery", "King Soopers")
+    fake.add("b", "Celery", checked=True)
+    fake.add("c", "2 celery stalks", checked=True)
+    client.post("/sync")
+
+    group = section(names_page(client), "Merge suggestions")
+    assert 'name="target" value="Celery"' in group  # Title Case by default
+
+    page = client.get("/names/merge", params={"target": "Celery", "keys": ["2 celery stalks"]})
+    preview = text_of(page.text)
+    assert "Renames the item “celery” to “Celery”" in preview
+    assert "quantity “” · name “2 celery stalks” · details “”" in preview  # lines show quantity
+    assert "quantity “” · name “celery” · details “”" in preview  # the item's own line
+    client.post(
+        "/names/merge",
+        data={"target": "Celery", "keys": ["2 celery stalks"], "units": ["stalks"],
+              "styles": [""], "forms": shown_forms(page.text)},
+    )  # fmt: skip
+    assert [r[0] for r in conn.execute("SELECT name FROM item")] == ["Celery"]
+    assert fake.lines["a"].name == "Celery" and fake.lines["b"].name == "Celery"

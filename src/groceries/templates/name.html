@@ -34,7 +34,7 @@
 <datalist id="item-names">{% for i in items %}<option value="{{ i.name }}">{% endfor %}</datalist>
 <form method="get" action="/names/merge" class="fields">
   <input type="hidden" name="keys" value="{{ key }}">
-  <label>Item <input name="target" value="{{ found.item_name if found else '' }}" list="item-names" placeholder="an item, or a new name" required></label>
+  <label>Item <input name="target" value="{{ (found.item_name if found.canonical else title_case(found.item_name)) if found else '' }}" list="item-names" placeholder="an item, or a new name" required></label>
   <label>Unit <input name="units" value="{{ found.unit if found else '' }}" placeholder="e.g. cloves"></label>
   <label>Style <input name="styles" value="{{ found.style if found else '' }}" placeholder="e.g. minced"></label>
   <button class="wa-brand">Preview…</button>
