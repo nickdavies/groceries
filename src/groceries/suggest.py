@@ -78,17 +78,24 @@ def kind(label: str) -> str | None:
     return None
 
 
-def defaults(alias: str, target: str) -> tuple[str, str]:
-    """The (unit, style) mapping `alias` into the item `target` starts with.
+_AMOUNT = re.compile(r"^(?:\d+(?:[.,/]\d+)?|[½⅓⅔¼¾⅕⅛])$")
 
-    Alias words that aren't in the target (or a misspelling of one) become the style,
-    except the first unit word, which becomes the unit. Parentheticals and the comma tail
-    are kept in the style. "garlic cloves, finely chopped" into "Garlic" gives
-    ("cloves", "finely chopped"); "egg whites" into "Eggs" gives ("", "whites").
+
+def defaults(alias: str, target: str) -> tuple[str, str, str]:
+    """The (quantity, unit, notes) mapping `alias` into the item `target` starts with.
+
+    The first number in the alias becomes the quantity and the first unit word after the
+    target's words the unit; the other words not in the target (or a misspelling of one)
+    become the notes, with any parenthetical and comma tail. "2 celery stalks" into
+    "Celery" gives ("2", "stalks", ""); "garlic cloves, finely chopped" into "Garlic" gives
+    ("", "cloves", "finely chopped"); "egg whites" into "Eggs" gives ("", "", "whites").
     """
     target_stems, target_words = stems(target), core(target)
-    unit, rest = "", []
+    quantity, unit, rest = "", "", []
     for word in words(alias):
+        if not quantity and _AMOUNT.match(word):
+            quantity = word
+            continue
         if stem_words([word])[0] in target_stems:
             continue
         if difflib.get_close_matches(word, target_words, n=1, cutoff=0.8):
@@ -102,7 +109,7 @@ def defaults(alias: str, target: str) -> tuple[str, str]:
     if "," in without_parens:
         tail.append(without_parens.split(",", 1)[1].strip())
     parts = [" ".join(rest), *tail]
-    return unit, ", ".join(dict.fromkeys(p for p in parts if p))
+    return quantity, unit, ", ".join(dict.fromkeys(p for p in parts if p))
 
 
 @dataclass(frozen=True)
@@ -123,8 +130,9 @@ class Suggestion:
     alias: Name
     target: Name  # an item's name, or a name that would become a new item
     reason: str
+    quantity: str
     unit: str
-    style: str
+    style: str  # notes
 
 
 def _clean(label: str) -> bool:
@@ -196,6 +204,5 @@ def suggest(names: list[Name], distinct: set[tuple[str, str]]) -> list[Suggestio
     for key, options in candidates.items():
         alias = by_key[key]
         target, reason = max(options, key=lambda o: rank(o[0]) if o[0].key in by_key else ())
-        unit, style = defaults(alias.label, target.label)
-        found.append(Suggestion(alias, target, reason, unit, style))
+        found.append(Suggestion(alias, target, reason, *defaults(alias.label, target.label)))
     return sorted(found, key=lambda s: (s.target.label.casefold(), s.alias.label))

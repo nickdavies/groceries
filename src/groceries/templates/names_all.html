@@ -4,7 +4,7 @@
 
 {% block content %}
 <h1>All names</h1>
-<p class="hint">Every name in AnyList: list lines (crossed off too) and recipe ingredients. Open one to see everywhere it's used and to change its item, unit and style, or ignore it. <a href="/names">Back to Names</a></p>
+<p class="hint">Every name in AnyList: list lines (crossed off too) and recipe ingredients. Open one to see everywhere it's used and to change its item, quantity, unit and notes, or ignore it. <a href="/names">Back to Names</a></p>
 
 <form method="get" action="/names/all" class="inline">
   <input name="q" value="{{ q }}" placeholder="Find a name">
@@ -19,18 +19,19 @@
 <div class="panel">
 <p class="hint">{{ rows|length }} {{ 'name' if rows|length == 1 else 'names' }}</p>
 <table class="wa-hover-rows names">
-  <thead><tr><th>Name</th><th>Used</th><th>Item</th><th>Unit</th><th>Style</th></tr></thead>
+  <thead><tr><th>Name</th><th>Used</th><th>Item</th><th>Quantity</th><th>Unit</th><th>Notes</th></tr></thead>
   <tbody>
   {% for r in rows %}
     <tr>
       <td>{{ name_link(r.key, r.label) }}{% if r.ignored %} <wa-badge variant="neutral" appearance="outlined">ignored</wa-badge>{% endif %}</td>
       <td class="hint">{{ where(r.key, '%d lines · %d recipe ingredients' % (r.line_count, r.recipe_count)) }}</td>
       <td>{% if r.item_id %}<a href="/items/{{ r.item_id }}">{{ r.item_name }}</a>{% endif %}</td>
+      <td>{{ r.quantity or '' }}</td>
       <td>{{ r.unit or '' }}</td>
       <td>{{ r.style or '' }}</td>
     </tr>
   {% else %}
-    <tr><td colspan="5">No names match.</td></tr>
+    <tr><td colspan="6">No names match.</td></tr>
   {% endfor %}
   </tbody>
 </table>

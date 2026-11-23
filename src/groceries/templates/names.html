@@ -15,7 +15,7 @@
 
 <div class="panel" id="merge">
 <h2>Merge suggestions {{ groups|length }}</h2>
-<p class="hint">Each group is a name and the names that look like it. Check the ones that are the same thing, pick (or type) the name to keep, and Merge… to set each one's unit and style. Names that only contain the group's name start unchecked: they're often different things (“garlic powder”).</p>
+<p class="hint">Each group is a name and the names that look like it. Check the ones that are the same thing, pick (or type) the name to keep, and Merge… to set each one's quantity, unit and notes and see every change before writing it. Names that only contain the group's name start unchecked: they're often different things (“garlic powder”).</p>
 {% for g in groups %}
 <wa-details class="group">
   <span slot="summary"><strong>{{ g.target.label }}</strong>

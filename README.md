@@ -41,16 +41,16 @@ ordered.
     group's name ("garlic powder") start unchecked. Check the ones that are the same,
     pick or type the name to keep, and Merge… opens the merge page. "Not the same" and
     Ignore act on the checked names and stay remembered.
-  - **Merge page.** Each name's unit and style, and every change the merge makes in
+  - **Merge page.** Each name's quantity, unit and notes, and every change the merge makes in
     AnyList, before and after, including respellings of the kept name itself. Editing a
     field updates the preview in place. The final button maps the names, approves
     exactly the changes shown, and writes them; there's no separate review step.
   - **Compounds** ("salt and pepper") and **choices** ("walnuts or chips") are listed
     separately and never suggested.
   - **All names.** `/names/all` lists every name, filterable by in an item, not in an
-    item, or ignored. Each name's page shows everywhere it's used, its item, unit and
-    style (typing a new item name there makes it an item of its own), ignoring, and
-    "not the same" pairs, which can be removed. Changing its item, unit or style goes
+    item, or ignored. Each name's page shows everywhere it's used, its item, quantity,
+    unit and notes (typing a new item name there makes it an item of its own), ignoring, and
+    "not the same" pairs, which can be removed. Changing its item, quantity, unit or notes goes
     through the merge page.
   - **Mapping.** Mapping a name into an item makes the item *canonical*: its other names
     get rewritten to the item's name. Mapping another item's own name merges that item;
@@ -59,12 +59,19 @@ ordered.
     item, dropping its rewrites (it can be suggested again). "Stop rewriting this item"
     turns an item's canonical flag off. Neither undoes rewrites already written; the
     log and the recipe backup keep the old text.
-  - **Unit and style.** Each mapped name carries an optional unit and style.
+  - **Quantity, unit and notes.** Each mapped name carries an optional quantity, unit
+    and notes, shown everywhere as `quantity: X, unit: U, name: N, notes: Y`.
+    - The quantity fills an empty quantity, with the unit: "2 celery stalks" with no
+      quantity becomes Celery, quantity 2 stalks. It never overwrites a quantity; where
+      there's already a different amount it's kept in the notes instead, and the same
+      amount is dropped as a duplicate.
     - The unit joins a bare-number quantity: "3 garlic cloves" becomes "3 cloves Garlic".
-    - The style goes in front of the ingredient's note or the line's details: "minced
-      shallot" becomes "Shallot, minced".
+    - The notes go in front of an ingredient's note or a line's details: "minced shallot"
+      becomes "Shallot, minced".
     - A recipe's display text is rebuilt as "{quantity} {name}, {note}", the form
       AnyList's editor writes. Scaling uses the quantity, not this text.
+    - The merge box defaults to Title Case, and the casing typed wins: merging into
+      "Celery" renames an item called "celery".
   - **Review.** Nothing is written without being shown first, with its exact before and
     after: on the merge page, or under Needs review for anything the merge page didn't
     cover.

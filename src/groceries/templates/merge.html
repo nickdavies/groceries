@@ -5,7 +5,7 @@
 {% block content %}
 <h1>Merge into “{{ target }}”</h1>
 <p class="hint">{% if renames %}Renames the item “{{ renames }}” to “{{ target }}”.{% elif exists %}“{{ target }}” is an item.{% else %}This creates the item “{{ target }}”.{% endif %}
-  Below is every change the merge makes in AnyList. Edit a unit or style and the preview updates. The unit joins a bare-number quantity (“3” becomes “3 cloves”); the style goes in front of the note (“minced”). Merging writes exactly what's shown.</p>
+  Below is every change the merge makes in AnyList; edit a field and the preview updates. Quantity fills an empty quantity (with the unit), and is kept in the notes where there's already a different amount. Unit joins a bare-number quantity (“3” becomes “3 cloves”). Notes go in front of the existing notes. Merging writes exactly what's shown.</p>
 
 {# Elements with data-swap are replaced from a fresh render when a field changes; the
    fields themselves stay put so typing isn't interrupted. #}
@@ -19,8 +19,9 @@
         {% if e.found and e.found.item_id and e.found.item_name|lower != target|lower %}
         <div class="hint stale">{% if e.own %}Merges the item “{{ e.found.item_name }}”: its stores and products move here{% else %}Moves out of the item “{{ e.found.item_name }}”{% endif %}</div>
         {% endif %}</div>
-      <label>Unit <input name="units" value="{{ e.unit }}" placeholder="e.g. cloves" size="8"></label>
-      <label>Style <input name="styles" value="{{ e.style }}" placeholder="e.g. minced"></label>
+      <label>Quantity <input name="quantities" value="{{ e.quantity }}" placeholder="e.g. 2"></label>
+      <label>Unit <input name="units" value="{{ e.unit }}" placeholder="e.g. cloves"></label>
+      <label>Notes <input name="styles" value="{{ e.style }}" placeholder="e.g. minced"></label>
     </div>
     <div id="preview-{{ loop.index }}" data-swap>{{ changes_table(e.changes) }}</div>
   </section>

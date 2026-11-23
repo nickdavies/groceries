@@ -143,14 +143,15 @@
 
 <div class="panel" id="names">
 <h2>AnyList names</h2>
-<p class="hint">Names in AnyList that mean this item.{% if item.canonical %} Each is rewritten to “{{ item.name }}”: the unit joins a bare-number quantity (“3” becomes “3 cloves”) and the style goes in the note (“minced”). Changing them sends the rewrites back to review.{% endif %} Split off a name to stop it mapping here; text already rewritten stays as it is.</p>
+<p class="hint">Names in AnyList that mean this item.{% if item.canonical %} Each is rewritten to “{{ item.name }}”: the quantity fills an empty quantity, the unit joins a bare-number quantity (“3” becomes “3 cloves”), and the notes go in front of the existing notes (“minced”). Changing them sends the rewrites back to review.{% endif %} Split off a name to stop it mapping here; text already rewritten stays as it is.</p>
 <table>
-  <thead><tr><th>Name</th><th>Unit</th><th>Style</th><th></th><th></th></tr></thead>
+  <thead><tr><th>Name</th><th>Quantity</th><th>Unit</th><th>Notes</th><th></th><th></th></tr></thead>
   <tbody>
   {% for a in aliases %}
     <tr>
       <td>{{ a.external_id }}{% if a.own %} <span class="hint">(its own name)</span>{% endif %}</td>
-      {% if a.own %}<td></td><td></td><td></td><td></td>{% else %}
+      {% if a.own %}<td></td><td></td><td></td><td></td><td></td>{% else %}
+      <td><input name="quantity" value="{{ a.quantity }}" size="5" form="alias-{{ loop.index }}"></td>
       <td><input name="unit" value="{{ a.unit }}" size="8" form="alias-{{ loop.index }}"></td>
       <td><input name="style" value="{{ a.style }}" form="alias-{{ loop.index }}"></td>
       <td><form method="post" action="/items/{{ item.id }}/aliases" id="alias-{{ loop.index }}">

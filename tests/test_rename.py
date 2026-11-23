@@ -76,7 +76,7 @@ def test_ingredient_rewrites(conn, quantity, alias, note, item_name, unit, style
     [change] = planned(conn, fake)
     assert change.new == expected
     assert change.old == fake.ingredient("r", "i")
-    assert change.form.bare_quantity == (quantity.strip().isdigit())
+    assert change.form.quantity_kind == ("bare" if quantity.strip().isdigit() else "other")
 
 
 def test_items_not_marked_canonical_are_never_planned(conn):
@@ -196,12 +196,13 @@ def test_ingredients_are_written_first_and_moved_lines_keep_the_items_stores(con
     assert [r[0] for r in rows] == [item(conn, "Garlic")]
 
 
-def test_lines_get_the_unit_and_style_in_their_details(conn):
+def test_lines_get_the_unit_in_their_quantity_and_notes_in_details(conn):
     map_name(conn, "garlic cloves, minced", item(conn, "Garlic"), unit="cloves", style="minced")
     fake = FakeList()
     fake.add("a", "garlic cloves, minced", quantity="3", details="for the soup", checked=True)
     [change] = planned(conn, fake)
-    assert change.new == LineText("Garlic", "cloves, minced, for the soup", "3")
+    # The unit joins the line's bare-number quantity; the notes go in front of its details.
+    assert change.new == LineText("Garlic", "minced, for the soup", "3 cloves")
 
 
 def test_split_off_stops_rewrites(conn):
@@ -330,3 +331,59 @@ def test_a_rewrite_anylist_does_not_keep_is_not_retried(conn):
     assert len(fake.line_writes) == 1
     [change] = planned(conn, fake)
     assert change.held == rename.NOT_KEPT
+
+
+@pytest.mark.parametrize(
+    "line_quantity, details, expected",
+    [
+        ("", "", LineText("Celery", "", "2 stalks")),  # empty: filled
+        ("2", "", LineText("Celery", "", "2 stalks")),  # same amount: just the unit
+        ("1 bunch", "", LineText("Celery", "2 stalks", "1 bunch")),  # different: kept in notes
+    ],
+)
+def test_a_names_quantity_fills_empty_and_is_never_lost(conn, line_quantity, details, expected):
+    map_name(conn, "2 celery stalks", item(conn, "Celery"), unit="stalks", quantity="2")
+    fake = FakeList()
+    fake.add("a", "2 celery stalks", quantity=line_quantity, details=details, checked=True)
+    [change] = planned(conn, fake)
+    assert change.new == expected
+
+
+def test_a_count_guess_stays_in_the_notes_next_to_grams(conn):
+    map_name(conn, "egg yolks 3 eggs", item(conn, "Eggs"), style="yolks", quantity="3")
+    fake = FakeList()
+    fake.add_recipe("r", "Crème brûlée", ("i", "50g", "egg yolks 3 eggs", ""))
+    [change] = planned(conn, fake)
+    assert change.new.raw == "50g Eggs, 3, yolks"
+
+
+def test_line_quantities_are_written(conn):
+    map_name(conn, "2 celery stalks", item(conn, "Celery"), unit="stalks", quantity="2")
+    fake = FakeList()
+    fake.add("a", "2 celery stalks", checked=True)
+    approve_all(conn, fake)
+    run(sync(conn, fake))
+    line = fake.lines["a"]
+    assert (line.name, line.quantity, line.details) == ("Celery", "2 stalks", "")
+
+
+def test_migration_6_keeps_approvals_and_marks_their_quantity_kind(tmp_path):
+    path = tmp_path / "g.db"
+    old = sqlite3.connect(path, isolation_level=None)
+    for i, sql in enumerate(db.MIGRATIONS[:5], start=1):
+        old.executescript(f"BEGIN;\n{sql};\nPRAGMA user_version = {i};\nCOMMIT;")
+    old.execute(
+        "INSERT INTO rename_approval VALUES "
+        "('ingredient', 'garlic cloves', '', 1, 'Garlic', 'cloves', ''), "
+        "('line', 'Minced garlic', '', 0, 'Garlic', '', 'minced')"
+    )
+    old.close()
+    conn = db.connect(path)
+    rows = conn.execute(
+        "SELECT kind, quantity_kind, quantity, unit, style FROM rename_approval ORDER BY kind"
+    ).fetchall()
+    assert [tuple(r) for r in rows] == [
+        ("ingredient", "bare", "", "cloves", ""),
+        ("line", "other", "", "", "minced"),
+    ]
+    assert conn.execute("SELECT quantity FROM external_ref").fetchall() == []

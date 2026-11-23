@@ -317,6 +317,7 @@ def map_into(client, target: str, *keys: str):
         data={
             "target": target,
             "keys": keys,
+            "quantities": [""] * len(keys),
             "units": [""] * len(keys),
             "styles": [""] * len(keys),
         },
@@ -347,12 +348,14 @@ def test_merge_flow_from_group_to_written(env):
     assert "Merge and write 3 changes" in preview  # ingredient, line, and the "shallot" line
 
     # Editing the style re-renders the preview with it.
-    edited = client.get("/names/merge", params={**params, "units": [""], "styles": ["diced"]})
+    edited = client.get(
+        "/names/merge", params={**params, "quantities": [""], "units": [""], "styles": ["diced"]}
+    )
     assert "2 tablespoons Shallot, diced" in text_of(edited.text)
 
     client.post(
         "/names/merge",
-        data={"target": "Shallot", "keys": ["minced shallot"], "units": [""],
+        data={"target": "Shallot", "keys": ["minced shallot"], "quantities": [""], "units": [""],
               "styles": ["minced"], "forms": shown_forms(page)},
     )  # fmt: skip
     assert fake.ingredient("r", "i").raw == "2 tablespoons Shallot, minced"
@@ -371,7 +374,7 @@ def test_merge_writes_only_what_was_shown(env):
     fake.add_recipe("s", "Two", ("j", "1 tablespoon", "minced shallot", "divided"))
     client.post(
         "/names/merge",
-        data={"target": "Shallot", "keys": ["minced shallot"], "units": [""],
+        data={"target": "Shallot", "keys": ["minced shallot"], "quantities": [""], "units": [""],
               "styles": ["minced"], "forms": shown_forms(page.text)},
     )  # fmt: skip
     assert fake.ingredient("r", "i").name == "Shallot"
@@ -389,6 +392,7 @@ def test_merging_into_a_new_name_creates_the_item(env):
         data={
             "target": "Shallots",
             "keys": ["minced shallot", "shallots, chopped"],
+            "quantities": ["", ""],
             "units": ["", ""],
             "styles": ["minced", "chopped"],
         },
@@ -413,7 +417,13 @@ def test_merging_into_another_items_alias_is_refused(env):
     map_into(client, "Garlic", "garlic cloves")
     response = client.post(
         "/names/merge",
-        data={"target": "Garlic cloves", "keys": ["minced garlic"], "units": [""], "styles": [""]},
+        data={
+            "target": "Garlic cloves",
+            "keys": ["minced garlic"],
+            "quantities": [""],
+            "units": [""],
+            "styles": [""],
+        },
     )
     assert response.status_code == 409
 
@@ -446,7 +456,7 @@ def test_cancel_a_merge_from_review(env):
 
     client.post("/names/unmap", data={"key": "garlic cloves"})
     review = text_of(section(names_page(client), "Needs review"))
-    assert "garlic cloves" not in review and "List line named “garlic”" in review
+    assert "garlic cloves" not in review and "List line “garlic”" in review
     assert conn.execute("SELECT count(*) FROM name_distinct").fetchone()[0] == 0
 
     garlic = conn.execute("SELECT id FROM item WHERE name = 'Garlic'").fetchone()[0]
@@ -559,12 +569,22 @@ def test_merging_into_a_title_cased_name_renames_the_item(env):
     page = client.get("/names/merge", params={"target": "Celery", "keys": ["2 celery stalks"]})
     preview = text_of(page.text)
     assert "Renames the item “celery” to “Celery”" in preview
-    assert "quantity “” · name “2 celery stalks” · details “”" in preview  # lines show quantity
-    assert "quantity “” · name “celery” · details “”" in preview  # the item's own line
+    # The "2" goes to the quantity (with the unit), not the notes.
+    assert "quantity: —, unit: —, name: 2 celery stalks, notes: —" in preview
+    assert "quantity: 2, unit: stalks, name: Celery, notes: —" in preview
+    assert "quantity: —, unit: —, name: celery, notes: —" in preview  # the item's own line
     client.post(
         "/names/merge",
-        data={"target": "Celery", "keys": ["2 celery stalks"], "units": ["stalks"],
-              "styles": [""], "forms": shown_forms(page.text)},
-    )  # fmt: skip
+        data={
+            "target": "Celery",
+            "keys": ["2 celery stalks"],
+            "quantities": ["2"],
+            "units": ["stalks"],
+            "styles": [""],
+            "forms": shown_forms(page.text),
+        },
+    )
     assert [r[0] for r in conn.execute("SELECT name FROM item")] == ["Celery"]
     assert fake.lines["a"].name == "Celery" and fake.lines["b"].name == "Celery"
+    c = fake.lines["c"]
+    assert (c.name, c.quantity, c.details) == ("Celery", "2 stalks", "")

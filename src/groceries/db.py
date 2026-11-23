@@ -240,6 +240,32 @@ MIGRATIONS = [
         new TEXT NOT NULL
     );
     """,
+    """
+    -- quantity: an amount an alias carries, like the "2" in "2 celery stalks". It is set
+    --   on an occurrence whose quantity is empty, never over an existing one.
+    ALTER TABLE external_ref ADD COLUMN quantity TEXT NOT NULL DEFAULT '';
+
+    -- Approvals record the kind of quantity the source had ('empty', a 'bare' number, or
+    -- 'other') instead of a bare-number flag, and the mapping's quantity. Old approvals
+    -- become 'bare' or 'other', so an occurrence with an empty quantity is reviewed again.
+    CREATE TABLE rename_approval_v2 (
+        kind TEXT NOT NULL CHECK (kind IN ('ingredient', 'line')),
+        name TEXT NOT NULL,
+        extra TEXT NOT NULL,
+        quantity_kind TEXT NOT NULL CHECK (quantity_kind IN ('empty', 'bare', 'other')),
+        new_name TEXT NOT NULL,
+        quantity TEXT NOT NULL,
+        unit TEXT NOT NULL,
+        style TEXT NOT NULL,
+        PRIMARY KEY (kind, name, extra, quantity_kind, new_name, quantity, unit, style)
+    );
+    INSERT INTO rename_approval_v2
+        SELECT kind, name, extra, CASE WHEN bare_quantity THEN 'bare' ELSE 'other' END,
+               new_name, '', unit, style
+        FROM rename_approval;
+    DROP TABLE rename_approval;
+    ALTER TABLE rename_approval_v2 RENAME TO rename_approval;
+    """,
 ]
 
 

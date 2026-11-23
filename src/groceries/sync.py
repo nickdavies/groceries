@@ -84,7 +84,12 @@ def make_canonical(conn: sqlite3.Connection, item_id: int) -> None:
 
 
 def map_name(
-    conn: sqlite3.Connection, key: str, target: int, unit: str = "", style: str = ""
+    conn: sqlite3.Connection,
+    key: str,
+    target: int,
+    unit: str = "",
+    style: str = "",
+    quantity: str = "",
 ) -> None:
     """Make the AnyList name `key` an alias of `target`, and `target` canonical. If the
     name is another item's own name, that item is merged into `target`; if it's only
@@ -96,12 +101,12 @@ def map_name(
         merge_items(conn, row["item_id"], target)
     conn.execute(
         """
-        INSERT INTO external_ref (source, external_id, item_id, unit, style)
-        VALUES ('anylist', ?, ?, ?, ?)
-        ON CONFLICT (source, external_id) DO UPDATE SET
-          item_id = excluded.item_id, unit = excluded.unit, style = excluded.style
+        INSERT INTO external_ref (source, external_id, item_id, quantity, unit, style)
+        VALUES ('anylist', ?, ?, ?, ?, ?)
+        ON CONFLICT (source, external_id) DO UPDATE SET item_id = excluded.item_id,
+          quantity = excluded.quantity, unit = excluded.unit, style = excluded.style
         """,
-        (key, target, unit.strip(), style.strip()),
+        (key, target, quantity.strip(), unit.strip(), style.strip()),
     )
     make_canonical(conn, target)
 

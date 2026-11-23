@@ -87,17 +87,17 @@ class Services:
             await self._sync_locked()
 
     async def merge(
-        self, target: str, names: list[tuple[str, str, str]], forms: list[rename.Form]
+        self, target: str, names: list[tuple[str, str, str, str]], forms: list[rename.Form]
     ) -> None:
-        """Merge AnyList names, each (key, unit, style), into the item called `target`
+        """Merge AnyList names, each (key, quantity, unit, notes), into the item called `target`
         (created if there is none), approve exactly the rewrites the merge page showed, and
         write them. Anything else they call for waits on /names for review."""
         async with self.lock:
             item_id = sync.target_item(self.conn, target)
             # Same name in a different casing: the casing typed wins.
             self.conn.execute("UPDATE item SET name = ? WHERE id = ?", (target.strip(), item_id))
-            for key, unit, style in names:
-                sync.map_name(self.conn, key, item_id, unit, style)
+            for key, quantity, unit, style in names:
+                sync.map_name(self.conn, key, item_id, unit, style, quantity)
             rename.approve(self.conn, forms)
             await self._sync_locked()
 
@@ -361,8 +361,9 @@ class MergeEntry:
     label: str
     found: sqlite3.Row | None  # its current mapping, if any
     own: bool  # it is that item's own name, so merging moves the whole item
+    quantity: str
     unit: str
-    style: str
+    style: str  # notes
     changes: list = field(default_factory=list)
 
 
@@ -403,7 +404,7 @@ def mapping(conn, key: str):
     """The item a name maps to, with its unit and style, or None."""
     return conn.execute(
         """
-        SELECT r.unit, r.style, i.id AS item_id, i.name AS item_name, i.canonical
+        SELECT r.quantity, r.unit, r.style, i.id AS item_id, i.name AS item_name, i.canonical
         FROM external_ref r JOIN item i ON i.id = r.item_id
         WHERE r.source = 'anylist' AND r.external_id = ?
         """,
@@ -514,7 +515,7 @@ def _routes(app: FastAPI) -> None:
             (item_id,),
         ).fetchall()
         aliases = conn.execute(
-            "SELECT external_id, unit, style, external_id = ? AS own FROM external_ref "
+            "SELECT external_id, quantity, unit, style, external_id = ? AS own FROM external_ref "
             "WHERE source = 'anylist' AND item_id = ? ORDER BY external_id",
             (normalize(item["name"]), item_id),
         ).fetchall()
@@ -614,13 +615,14 @@ def _routes(app: FastAPI) -> None:
         request: Request,
         item_id: int,
         key: Annotated[str, Form()],
+        quantity: Annotated[str, Form()] = "",
         unit: Annotated[str, Form()] = "",
         style: Annotated[str, Form()] = "",
     ):
         _svc(request).conn.execute(
-            "UPDATE external_ref SET unit = ?, style = ? "
+            "UPDATE external_ref SET quantity = ?, unit = ?, style = ? "
             "WHERE source = 'anylist' AND external_id = ? AND item_id = ?",
-            (unit.strip(), style.strip(), key, item_id),
+            (quantity.strip(), unit.strip(), style.strip(), key, item_id),
         )
         return RedirectResponse(f"/items/{item_id}#names", status_code=303)
 
@@ -662,7 +664,7 @@ def _routes(app: FastAPI) -> None:
         }.get(show, "1")
         rows = svc.conn.execute(
             f"""
-            SELECT n.*, r.unit, r.style, r.item_id, i.name AS item_name
+            SELECT n.*, r.quantity, r.unit, r.style, r.item_id, i.name AS item_name
             FROM anylist_name n
             LEFT JOIN external_ref r ON r.source = 'anylist' AND r.external_id = n.key
             LEFT JOIN item i ON i.id = r.item_id
@@ -717,6 +719,7 @@ def _routes(app: FastAPI) -> None:
         request: Request,
         target: str,
         keys: Annotated[list[str] | None, Query()] = None,
+        quantities: Annotated[list[str] | None, Query()] = None,
         units: Annotated[list[str] | None, Query()] = None,
         styles: Annotated[list[str] | None, Query()] = None,
     ):
@@ -734,24 +737,27 @@ def _routes(app: FastAPI) -> None:
             raise HTTPException(409, f"{e} Merge into that item, or choose another name.") from e
         item_name = target  # the casing typed wins; merging renames the item to it
         keys = [k for k in dict.fromkeys(keys or []) if k != normalize(item_name)]
-        typed = units is not None and styles is not None and len(units) == len(styles) == len(keys)
+        typed = all(
+            fields is not None and len(fields) == len(keys)
+            for fields in (quantities, units, styles)
+        )
         entries = []
         for i, key in enumerate(keys):
             label = name_label(conn, key)
             found = mapping(conn, key)
             if typed:
-                unit, style = units[i], styles[i]
+                fields = quantities[i], units[i], styles[i]
             elif found and item and found["item_id"] == item["id"]:
-                unit, style = found["unit"], found["style"]
+                fields = found["quantity"], found["unit"], found["style"]
             else:
-                unit, style = suggest.defaults(label, item_name)
-            entries.append(MergeEntry(key, label, found, sync.is_own_name(conn, key), unit, style))
+                fields = suggest.defaults(label, item_name)
+            entries.append(MergeEntry(key, label, found, sync.is_own_name(conn, key), *fields))
         if not entries:
             return RedirectResponse("/names#merge", status_code=303)
 
         changes = []
         if svc.snapshot is not None:
-            names = [(e.key, e.unit, e.style) for e in entries]
+            names = [(e.key, e.quantity, e.unit, e.style) for e in entries]
             changes = rename.preview(
                 conn, svc.snapshot, item["id"] if item else None, item_name, names
             )
@@ -777,6 +783,7 @@ def _routes(app: FastAPI) -> None:
         request: Request,
         target: Annotated[str, Form()],
         keys: Annotated[list[str], Form()],
+        quantities: Annotated[list[str], Form()],
         units: Annotated[list[str], Form()],
         styles: Annotated[list[str], Form()],
         forms: Annotated[list[str] | None, Form()] = None,
@@ -786,7 +793,7 @@ def _routes(app: FastAPI) -> None:
         try:
             await svc.merge(
                 target,
-                list(zip(keys, units, styles, strict=True)),
+                list(zip(keys, quantities, units, styles, strict=True)),
                 [rename.Form.from_json(f) for f in forms or []],
             )
         except sync.NotAnItemName as e:
@@ -1017,4 +1024,5 @@ templates.env.globals["search_link"] = search_link
 templates.env.globals["compose"] = rename.compose
 templates.env.globals["normalize"] = normalize
 templates.env.globals["title_case"] = suggest.title_case
+templates.env.globals["split_quantity"] = rename.split_quantity
 templates.env.globals["loads"] = json.loads

@@ -108,7 +108,7 @@ class FakeList:
             if line is None or LineText(line.name, line.details, line.quantity) != old:
                 continue
             if line_id not in self.ignored_renames:
-                self._replace(line_id, name=new.name, details=new.details)
+                self._replace(line_id, name=new.name, details=new.details, quantity=new.quantity)
             done.add(line_id)
         return done
 

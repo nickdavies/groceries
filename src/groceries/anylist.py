@@ -18,6 +18,7 @@ from typing import Protocol
 from aioanylist import AnyListClient, AuthenticationError, AuthTokens
 from aioanylist.identifiers import uuid4_hex
 from aioanylist.item_semantics import quantity_not_empty, quantity_to_deprecated_string
+from aioanylist.parsing.quantity import parse_quantity_and_package_size
 from aioanylist.proto import PB, PBStore
 
 log = logging.getLogger(__name__)
@@ -38,8 +39,8 @@ class Line:
 
 @dataclass(frozen=True)
 class LineText:
-    """The parts of a line a canonical-name rewrite shows and checks. Only the name and
-    details are written; the quantity is shown so a preview can't hide a change to it."""
+    """The parts of a line a canonical-name rewrite changes: name, details (AnyList's notes)
+    and quantity, written as AnyList parses it ("2 stalks": amount 2, unit stalks)."""
 
     name: str
     details: str
@@ -184,6 +185,10 @@ class AnyListBackend:
                 await self._client.lists.rename_item(list_id, line_id, new.name, flush=False)
             if new.details != old.details:
                 await self._client.lists.set_details(list_id, line_id, new.details, flush=False)
+            if new.quantity != old.quantity:
+                parsed = parse_quantity_and_package_size(new.quantity)
+                pb = parsed.quantityPb if parsed else PB.PBItemQuantity(rawQuantity=new.quantity)
+                await self._client.lists.set_quantity(list_id, line_id, pb, flush=False)
             written.add(line_id)
         await self._client.flush()
         return written

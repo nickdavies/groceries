@@ -1,12 +1,16 @@
 """Canonical names: rewrite a curated item's AnyList names to the item's own name.
 
-A name maps to an item through external_ref, by normalized name. For each item marked
-canonical, every recipe ingredient and list line (crossed off too) whose name maps to it
-but isn't exactly item.name becomes a planned Change:
+A name maps to an item through external_ref, by normalized name, with an optional
+quantity, unit and notes (stored as `style`). For each item marked canonical, every recipe
+ingredient and list line (crossed off too) whose name maps to it but isn't exactly
+item.name becomes a planned Change:
   - the name becomes item.name;
-  - the alias's unit joins a bare-number quantity: "3" + "cloves" gives "3 cloves"
-    (ingredients only; on a line it goes into the details with the style);
-  - the alias's style goes in front of the note or details, unless already in them;
+  - an empty quantity is filled from the alias's quantity, with its unit ("2 celery
+    stalks" with no quantity gets "2 stalks"); a bare-number quantity gets the unit ("3"
+    + "cloves" gives "3 cloves"); any other quantity is left as it is;
+  - on a list line, a unit that couldn't join the quantity goes into the notes instead,
+    so it isn't lost;
+  - the alias's notes go in front of the note or details, unless already in them;
   - an ingredient's display text is rebuilt as "{quantity} {name}, {note}", the form
     AnyList's own editor writes. Scaling uses `quantity`, never this text.
 
@@ -14,13 +18,14 @@ Lines added from a recipe are left alone: AnyList ignores renames of those lines
 acknowledges the write but keeps the name), and rewriting the recipe already moves or
 relinks them.
 
-A change is written only if its Form was approved on /names. A Form is the exact source
-(old name, note or details, whether the quantity was a bare number) plus the exact
-mapping (new name, unit, style), so a different note, a different spelling or an edited
-mapping all wait for review again. Ingredient changes are held back while an ordered
-line comes from their recipe: AnyList moves that line to a new id, which would drop its
-"On the way" state. Any change already written once whose target still has the old text
-is held back too, so a write AnyList doesn't keep is never retried in a loop.
+A change is written only if its Form was approved, on the merge page or under Needs
+review. A Form is the exact source (old name, note or details, and whether its quantity
+was empty, a bare number or something else) plus the exact mapping (new name, quantity,
+unit, notes), so a different note, a different spelling or an edited mapping all wait for
+review again. Ingredient changes are held back while an ordered line comes from their
+recipe: AnyList moves that line to a new id, which would drop its "On the way" state. Any
+change already written once whose target still has the old text is held back too, so a
+write AnyList doesn't keep is never retried in a loop.
 
 Ingredients are written first, because saving a recipe makes AnyList move its open lines
 to the line for the new name, which merges same-unit lines. Lines are planned again
@@ -56,10 +61,11 @@ class Form:
     kind: str  # 'ingredient' | 'line'
     name: str
     extra: str  # the ingredient's note, or the line's details
-    bare_quantity: bool
+    quantity_kind: str  # the source quantity: 'empty', a 'bare' number, or 'other'
     new_name: str
+    quantity: str  # the mapping's: fills an empty quantity
     unit: str
-    style: str
+    style: str  # the mapping's notes
 
     def to_json(self) -> str:
         return json.dumps(astuple(self))
@@ -83,6 +89,10 @@ class Change:
 NOT_KEPT = "AnyList didn't keep this rewrite when it was written before"
 
 
+def _join(*parts: str) -> str:
+    return ", ".join(p for p in parts if p)
+
+
 def combine(style: str, text: str) -> str:
     """`style` in front of a note or details, unless it's already there."""
     if not style or style.casefold() in text.casefold():
@@ -96,10 +106,50 @@ def _bare(quantity: str) -> bool:
     return bool(parsed and parsed.quantityPb.amount and not parsed.quantityPb.unit)
 
 
+def quantity_kind(quantity: str) -> str:
+    if not quantity.strip():
+        return "empty"
+    return "bare" if _bare(quantity) else "other"
+
+
 def _with_unit(quantity: str, unit: str) -> str:
     """ "3" + "cloves" gives "3 cloves", and "1" + "cloves" gives "1 clove"."""
-    amount = parse_quantity_and_package_size(quantity).quantityPb.amount
+    parsed = parse_quantity_and_package_size(quantity)
+    amount = parsed.quantityPb.amount if parsed else quantity
     return f"{quantity} {unit_for_amount(unit, amount_as_float(amount))}"
+
+
+def fill_quantity(quantity: str, ref: Mapping) -> tuple[str, str]:
+    """A quantity after a mapping, and anything from the mapping's quantity that has to go
+    into the notes instead so it isn't lost.
+
+    An empty quantity is filled from the mapping's quantity (with its unit), and a bare
+    number gets the unit; anything else is unchanged. If the mapping's quantity couldn't
+    be used because the quantity already has a different amount ("50g" vs the "3" in "egg
+    yolks 3 eggs"), it goes to the notes; the same amount is just a duplicate and is
+    dropped."""
+    kind = quantity_kind(quantity)
+    mapped = ref["quantity"]
+    if mapped and ref["unit"]:
+        mapped = _with_unit(mapped, ref["unit"])
+    if kind == "empty":
+        return (mapped or quantity), ""
+    filled = _with_unit(quantity, ref["unit"]) if kind == "bare" and ref["unit"] else quantity
+    if not ref["quantity"] or split_quantity(quantity)[0] == ref["quantity"]:
+        return filled, ""
+    return filled, mapped
+
+
+def split_quantity(quantity: str) -> tuple[str, str]:
+    """A quantity as (amount, unit) for display: "2 stalks" gives ("2", "stalks"), and
+    "150g (1 cup)" gives ("150", "g (1 cup)"). One AnyList can't parse is all amount."""
+    parsed = parse_quantity_and_package_size(quantity)
+    if parsed is None or not parsed.quantityPb.amount:
+        return quantity.strip(), ""
+    unit = parsed.quantityPb.unit
+    if parsed.HasField("packageSizePb") and parsed.packageSizePb.rawPackageSize:
+        unit = f"{unit} ({parsed.packageSizePb.rawPackageSize})".strip()
+    return parsed.quantityPb.amount, unit
 
 
 def compose(quantity: str, name: str, note: str) -> str:
@@ -122,13 +172,14 @@ def plan(
     conn: sqlite3.Connection, snap: Snapshot, overrides: Mapping[str, dict] | None = None
 ) -> list[Change]:
     """Every rewrite the canonical items call for, approved or not. `overrides` maps name
-    keys to mappings ({item_id, item_name, unit, style}) that aren't saved yet, to preview a
-    merge before making it."""
+    keys to mappings ({item_id, item_name, quantity, unit, style}) that aren't saved yet, to
+    preview a merge before making it."""
     refs = {
         r["external_id"]: dict(r)
         for r in conn.execute(
             """
-            SELECT r.external_id, r.unit, r.style, i.id AS item_id, i.name AS item_name
+            SELECT r.external_id, r.quantity, r.unit, r.style, i.id AS item_id,
+              i.name AS item_name
             FROM external_ref r JOIN item i ON i.id = r.item_id
             WHERE r.source = 'anylist' AND i.canonical
             """
@@ -150,12 +201,11 @@ def plan(
         ref = refs.get(normalize(old.name))
         if ref is None or old.name == ref["item_name"]:
             continue
-        bare = _bare(old.quantity)
-        quantity = _with_unit(old.quantity, ref["unit"]) if ref["unit"] and bare else old.quantity
-        note = combine(ref["style"], old.note)
+        quantity, extra = fill_quantity(old.quantity, ref)
+        note = combine(_join(extra, ref["style"]), old.note)
         name = ref["item_name"]
         new = IngredientText(quantity, name, note, compose(quantity, name, note))
-        form = Form("ingredient", old.name, old.note, bare, name, ref["unit"], ref["style"])
+        form = _form("ingredient", old.name, old.note, old.quantity, ref)
         target = f"{ing.recipe_id}/{ing.id}"
         reason = ""
         if not_kept(target, old, new):
@@ -167,14 +217,29 @@ def plan(
         ref = refs.get(normalize(line.name))
         if ref is None or line.name == ref["item_name"] or line.recipe_ids:
             continue
-        style = ", ".join(p for p in (ref["unit"], ref["style"]) if p)
+        quantity, extra = fill_quantity(line.quantity, ref)
+        unit_used = quantity != line.quantity or extra or not ref["unit"]
+        notes = _join(extra, "" if unit_used else ref["unit"], ref["style"])
         old = LineText(line.name, line.details, line.quantity)
-        new = LineText(ref["item_name"], combine(style, line.details), line.quantity)
-        form = Form("line", old.name, old.details, False, new.name, ref["unit"], ref["style"])
+        new = LineText(ref["item_name"], combine(notes, line.details), quantity)
+        form = _form("line", old.name, old.details, line.quantity, ref)
         place = "Shared List, crossed off" if line.checked else "Shared List"
         reason = NOT_KEPT if not_kept(line.id, old, new) else ""
         changes.append(Change(form, line.id, place, ref["item_id"], old, new, reason))
     return changes
+
+
+def _form(kind: str, name: str, extra: str, quantity: str, ref: Mapping) -> Form:
+    return Form(
+        kind,
+        name,
+        extra,
+        quantity_kind(quantity),
+        ref["item_name"],
+        ref["quantity"],
+        ref["unit"],
+        ref["style"],
+    )
 
 
 def preview(
@@ -182,37 +247,37 @@ def preview(
     snap: Snapshot,
     item_id: int | None,
     item_name: str,
-    names: list[tuple[str, str, str]],
+    names: list[tuple[str, str, str, str]],
 ) -> list[Change]:
-    """The rewrites merging `names`, each (key, unit, style), into the item would make:
-    theirs, plus respellings of the item's own name, since merging makes it canonical.
-    `item_id` is None for an item that doesn't exist yet."""
+    """The rewrites merging `names`, each (key, quantity, unit, notes), into the item would
+    make: theirs, plus respellings of the item's own name, since merging makes it
+    canonical. `item_id` is None for an item that doesn't exist yet."""
 
-    def ref(unit: str, style: str) -> dict:
-        return {"item_id": item_id, "item_name": item_name, "unit": unit, "style": style}
+    def ref(quantity: str, unit: str, style: str) -> dict:
+        return {
+            "item_id": item_id,
+            "item_name": item_name,
+            "quantity": quantity.strip(),
+            "unit": unit.strip(),
+            "style": style.strip(),
+        }
 
-    overrides = {normalize(item_name): ref("", "")}
-    overrides |= {key: ref(unit.strip(), style.strip()) for key, unit, style in names}
+    overrides = {normalize(item_name): ref("", "", "")}
+    overrides |= {key: ref(q, unit, style) for key, q, unit, style in names}
     return [c for c in plan(conn, snap, overrides) if normalize(c.form.name) in overrides]
 
 
+_FORM_COLUMNS = "kind, name, extra, quantity_kind, new_name, quantity, unit, style"
+
+
 def approvals(conn: sqlite3.Connection) -> set[Form]:
-    return {
-        Form(r[0], r[1], r[2], bool(r[3]), r[4], r[5], r[6])
-        for r in conn.execute(
-            "SELECT kind, name, extra, bare_quantity, new_name, unit, style FROM rename_approval"
-        )
-    }
+    return {Form(*r) for r in conn.execute(f"SELECT {_FORM_COLUMNS} FROM rename_approval")}
 
 
 def approve(conn: sqlite3.Connection, forms: list[Form]) -> None:
     conn.executemany(
-        "INSERT OR IGNORE INTO rename_approval "
-        "(kind, name, extra, bare_quantity, new_name, unit, style) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        [
-            (f.kind, f.name, f.extra, int(f.bare_quantity), f.new_name, f.unit, f.style)
-            for f in forms
-        ],
+        f"INSERT OR IGNORE INTO rename_approval ({_FORM_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        [astuple(f) for f in forms],
     )
 
 
