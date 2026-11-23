@@ -3,7 +3,7 @@
 {# The one way an item's fields are shown: quantity, unit, name, notes. "Notes" is an
    ingredient's note or a list line's details. #}
 {% macro fields(quantity, name, notes) %}{% set amount, unit = split_quantity(quantity) %}
-  <div class="hint fields">quantity: {{ amount or '—' }}, unit: {{ unit or '—' }}, name: {{ name or '—' }}, notes: {{ notes or '—' }}</div>
+  <div class="hint fields"><b>quantity:</b> {{ amount or '—' }}, <b>unit:</b> {{ unit or '—' }}, <b>name:</b> {{ name or '—' }}, <b>notes:</b> {{ notes or '—' }}</div>
 {%- endmacro %}
 
 {# An ingredient: the text the apps show, built from the fields, then the fields. A recipe

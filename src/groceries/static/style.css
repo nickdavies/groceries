@@ -125,6 +125,7 @@ table.names td:first-child { width: 30%; }
 .merge-name input { width: 100%; }
 @media (max-width: 700px) { .merge-name { grid-template-columns: 1fr 1fr 1fr; } .merge-name > div { grid-column: 1 / -1; } }
 table.changes td { vertical-align: top; }
+.hint.fields b { font-weight: var(--wa-font-weight-semibold); color: var(--wa-color-text-normal); }
 .hint.stale { color: var(--wa-color-warning-on-quiet); }
 .results img { width: 48px; height: 48px; object-fit: contain; }
 
