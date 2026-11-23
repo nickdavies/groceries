@@ -274,3 +274,13 @@ def test_migration_from_v1_keeps_settings_rules_and_ordered_lines(tmp_path):
     assert rows["a"]["ordered_from"] == 1 and rows["b"]["ordered_from"] is None
     with pytest.raises(sqlite3.IntegrityError):
         conn.execute("INSERT INTO store (name, kind, sort) VALUES ('X', 'bogus', 9)")
+
+
+def test_an_older_build_refuses_a_newer_database(tmp_path):
+    path = tmp_path / "g.db"
+    db.connect(path).close()
+    newer = sqlite3.connect(path)
+    newer.execute(f"PRAGMA user_version = {len(db.MIGRATIONS) + 1}")
+    newer.close()
+    with pytest.raises(db.NewerDatabase):
+        db.connect(path)

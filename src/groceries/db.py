@@ -278,10 +278,20 @@ def connect(path: Path | str) -> sqlite3.Connection:
     return conn
 
 
+class NewerDatabase(RuntimeError):
+    """The database was migrated by a newer version of the app than this one."""
+
+
 def migrate(conn: sqlite3.Connection) -> None:
     (version,) = conn.execute("PRAGMA user_version").fetchone()
     if version == len(MIGRATIONS):
         return
+    if version > len(MIGRATIONS):
+        # An older build (a rollback) against a newer schema would start, then fail on
+        # whatever changed. Refuse to start instead; deploy a build that knows the schema.
+        raise NewerDatabase(
+            f"database is at migration {version}, but this build only knows {len(MIGRATIONS)}"
+        )
     # Rebuilding a table means dropping it, which with foreign keys on would cascade
     # into the tables that reference it. They can only be switched outside a
     # transaction, and are checked once all migrations have run.
